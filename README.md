@@ -147,6 +147,35 @@ rather than by build-time conditions, so no backend-specific build is needed. Th
 driver (`sqlite-jdbc`) ships GraalVM reachability metadata, so no manual native configuration is
 required either.
 
+### Run with Docker
+
+Prebuilt images are published to GitHub Container Registry, so neither a JDK nor a build step is
+needed to run the broker. There are two, both carrying both storage backends:
+
+- `ghcr.io/making/amqgres:jvm` — the JVM build.
+- `ghcr.io/making/amqgres:native` — the GraalVM native image (faster startup, lower memory).
+
+The broker listens on `5672`, so that port has to be published with `-p`. Application arguments are
+passed straight through, exactly as on the JVM. For a self-contained run backed by SQLite:
+
+```shell
+docker run --rm -p 5672:5672 ghcr.io/making/amqgres:native \
+  --spring.profiles.active=sqlite --amqgres.queue.names=orders
+```
+
+To run against PostgreSQL (the default profile), point the datasource at your database:
+
+```shell
+docker run --rm -p 5672:5672 \
+  -e SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/amqgres \
+  -e SPRING_DATASOURCE_USERNAME=amqgres \
+  -e SPRING_DATASOURCE_PASSWORD=amqgres \
+  ghcr.io/making/amqgres:native
+```
+
+Swap `:native` for `:jvm` to use the JVM image; the arguments and environment variables are the
+same.
+
 
 ## Connecting a client
 
@@ -201,10 +230,12 @@ tar xzf apache-artemis-2.44.0-bin.tar.gz
 export PATH="$PWD/apache-artemis-2.44.0/bin:$PATH"
 ```
 
-Start the broker (built above) with a queue named `demo` (SQLite, no server needed):
+Start the broker with a queue named `demo` (SQLite, no server needed). The prebuilt native image
+avoids a local build; `-p 5672:5672` publishes the AMQP port:
 
 ```shell
-./target/amqgres --spring.profiles.active=sqlite --amqgres.queue.names=demo
+docker run --rm -p 5672:5672 ghcr.io/making/amqgres:native \
+  --spring.profiles.active=sqlite --amqgres.queue.names=demo
 ```
 
 Send three text messages to the `demo` queue:
