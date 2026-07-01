@@ -104,7 +104,7 @@ java -jar target/amqgres-0.0.1-SNAPSHOT.jar --spring.profiles.active=sqlite
 
 The `sqlite` profile defaults the datasource to a local `/tmp/amqgres.db` file. To point it at
 another file, override just the path with `amqgres.sqlite.path`; the mandatory `journal_mode=WAL`
-and `busy_timeout` parameters are appended for you:
+and `busy_timeout` JDBC parameters are appended for you:
 
 ```bash
 java -jar target/amqgres-0.0.1-SNAPSHOT.jar --spring.profiles.active=sqlite \
