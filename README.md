@@ -123,6 +123,28 @@ remains the option for running several broker instances against one database.
 java -jar target/amqgres-0.0.1-SNAPSHOT.jar
 ```
 
+With a GraalVM JDK, build a native image with the `native` profile:
+
+```shell
+./mvnw -Pnative native:compile
+./target/amqgres
+```
+
+A single native image supports both backends; the backend is chosen at startup with the profile,
+exactly as on the JVM:
+
+```shell
+./mvnw -Pnative native:compile
+./target/amqgres --spring.profiles.active=sqlite
+./target/amqgres --spring.profiles.active=postgres
+```
+
+Both JDBC drivers are included, and the storage beans are picked by a factory that runs at startup
+rather than by build-time conditions, so no backend-specific build is needed. The bundled SQLite
+driver (`sqlite-jdbc`) ships GraalVM reachability metadata, so no manual native configuration is
+required either.
+
+
 ## Connecting a client
 
 Amqgres speaks plain AMQP 1.0 over TCP. The example below uses Qpid JMS:
@@ -152,29 +174,6 @@ Delivery semantics:
   reached, after which it is dead-lettered or deleted.
 - If a consumer disconnects without acknowledging, the message lock expires after
   `lock.timeout-seconds` and the message becomes deliverable again.
-
-## Building a native executable
-
-With a GraalVM JDK, build a native image with the `native` profile:
-
-```shell
-./mvnw -Pnative native:compile
-./target/amqgres
-```
-
-A single native image supports both backends; the backend is chosen at startup with the profile,
-exactly as on the JVM:
-
-```shell
-./mvnw -Pnative native:compile
-./target/amqgres --spring.profiles.active=sqlite
-./target/amqgres --spring.profiles.active=postgres
-```
-
-Both JDBC drivers are included, and the storage beans are picked by a factory that runs at startup
-rather than by build-time conditions, so no backend-specific build is needed. The bundled SQLite
-driver (`sqlite-jdbc`) ships GraalVM reachability metadata, so no manual native configuration is
-required either.
 
 ## Sending and receiving from the command line
 
