@@ -170,6 +170,30 @@ depends on `connection` (to wake links) and on `message` (it implements `QueueNo
 `connection` depends on `queue` and `message`; there are no cycles. Both properties — no slice cycles
 and no dependencies on `config` from outside it — are enforced by `PackageArchitectureTest` (ArchUnit).
 
+## End-to-end tests run against both backends
+
+An end-to-end test that drives the broker over AMQP exercises behaviour that must hold on both
+storage backends, so it is written as three files rather than one, and never as a single class
+pinned to one backend:
+
+- `Abstract<Name>Test` holds the whole scenario — the `@SpringBootTest` properties, the JMS
+  interactions and the assertions — but is `abstract` and carries no backend wiring, so JUnit does
+  not run it directly.
+- `Postgres<Name>Test extends Abstract<Name>Test` adds only `@Import(TestcontainersConfiguration.class)`,
+  running the scenario against PostgreSQL on the default profile.
+- `Sqlite<Name>Test extends Abstract<Name>Test` adds only `@ActiveProfiles("sqlite")` and the
+  `@DynamicPropertySource` that points `spring.datasource.url` at a `@TempDir` SQLite file.
+
+The base class stays backend-agnostic. Where a scenario genuinely needs backend-specific SQL — for
+example back-dating `locked_at` to trigger lock reclaim, which is `now() - interval` on PostgreSQL
+but `datetime('now', ...)` on SQLite — the base class declares a small `protected abstract` hook
+(e.g. `backdatedLockedAt()`) that each subclass implements, rather than branching on the backend
+inside the shared test. The `AmqpIntegrationTest`, `ReadmeConnectingClientIntegrationTest`,
+`QueueProvisioningTest` and `DeadLetterQueueIntegrationTest` families all follow this shape; copy an
+existing trio when adding a new end-to-end test. Store-level unit tests (`MessageStoreTest` /
+`SqliteMessageStoreTest`) are a separate pair per backend and do not share a base class, because they
+assert against the store implementations directly rather than through the wire.
+
 ## Working on the code
 
 - Run the tests with `./mvnw test`. They start PostgreSQL through Testcontainers and drive the
