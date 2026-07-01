@@ -3,7 +3,6 @@ package com.example.amqgres.connection;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
-import com.example.amqgres.TestcontainersConfiguration;
 import com.example.amqgres.queue.QueueRepository;
 import jakarta.jms.Connection;
 import jakarta.jms.JMSException;
@@ -18,7 +17,6 @@ import org.junit.jupiter.api.Test;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jms.core.JmsClient;
 import org.springframework.messaging.MessagingException;
@@ -27,13 +25,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * End-to-end tests that drive the broker with an AMQP 1.0 client. Most cases use Spring's
- * {@link JmsClient}; the redelivery case drops to the raw JMS API because it needs to
- * receive without acknowledging, which {@code JmsClient} does not expose.
+ * End-to-end tests that drive the broker with an AMQP 1.0 client, shared by both storage
+ * backends. Most cases use Spring's {@link JmsClient}; the redelivery case drops to the
+ * raw JMS API because it needs to receive without acknowledging, which {@code JmsClient}
+ * does not expose. The SQLite runs additionally exercise the in-process consumer wakeup
+ * ({@code LocalQueueNotifier}), which replaces PostgreSQL {@code LISTEN}/{@code NOTIFY}.
+ *
+ * <p>
+ * Concrete subclasses only supply the backend wiring (PostgreSQL via Testcontainers, or
+ * the {@code sqlite} profile against a temporary file); the scenarios are declared here
+ * and inherited.
  */
 @SpringBootTest(properties = { "amqgres.listen.port=0", "amqgres.queue.auto-create=false" })
-@Import(TestcontainersConfiguration.class)
-class AmqpIntegrationTest {
+abstract class AbstractAmqpIntegrationTest {
 
 	@Autowired
 	private AmqpServerLifecycle server;
