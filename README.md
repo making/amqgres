@@ -153,6 +153,55 @@ Delivery semantics:
 - If a consumer disconnects without acknowledging, the message lock expires after
   `lock.timeout-seconds` and the message becomes deliverable again.
 
+## Sending and receiving from the command line
+
+Because Amqgres speaks plain AMQP 1.0, any AMQP 1.0 client works as a quick smoke test. The
+[Apache ActiveMQ Artemis](https://activemq.apache.org/components/artemis/) CLI is convenient because
+its `producer` and `consumer` commands can talk AMQP to any broker with `--protocol AMQP`; no Artemis
+server has to be running.
+
+Download and unpack the Artemis binary distribution, then use the `artemis` script in its `bin`
+directory:
+
+```shell
+curl -LO https://dlcdn.apache.org/activemq/activemq-artemis/2.44.0/apache-artemis-2.44.0-bin.tar.gz
+tar xzf apache-artemis-2.44.0-bin.tar.gz
+export PATH="$PWD/apache-artemis-2.44.0/bin:$PATH"
+```
+
+Start the broker with a queue named `demo` (SQLite, no server needed):
+
+```shell
+./target/amqgres --spring.profiles.active=sqlite --amqgres.queue.names=demo
+```
+
+Send three text messages to the `demo` queue:
+
+```shell
+artemis producer \
+  --protocol AMQP \
+  --url amqp://localhost:5672 \
+  --destination queue://demo \
+  --message "Hello from Artemis CLI" \
+  --message-count 3
+```
+
+Receive them, waiting up to five seconds and stopping once the queue is drained:
+
+```shell
+artemis consumer \
+  --protocol AMQP \
+  --url amqp://localhost:5672 \
+  --destination queue://demo \
+  --message-count 3 \
+  --receive-timeout 5000 \
+  --break-on-null
+```
+
+The consumer acknowledges each message, so a second run returns nothing until new messages are sent.
+Omitting `--amqgres.queue.names=demo` also works while `amqgres.queue.auto-create` is enabled
+(the default): the queue is created the first time the producer attaches.
+
 ## Building a native executable
 
 With a GraalVM JDK, build a native image with the `native` profile:
