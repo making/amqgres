@@ -167,6 +167,13 @@ try (Connection connection = factory.createConnection()) {
 }
 ```
 
+`session.createQueue("orders")` does not create the queue on the broker; it only builds a
+client-side `Queue` object naming the address. The queue is actually created when the producer or
+consumer attaches to it, and only because `amqgres.queue.auto-create` is enabled (the default). With
+`amqgres.queue.auto-create=false` the same code fails: attaching to an address that has not been
+provisioned up front is refused with `amqp:not-found`. AMQP 1.0 itself has no queue declaration, so
+this is a broker-side policy, not a protocol or JMS feature.
+
 Delivery semantics:
 
 - A received message is locked, not removed. Acknowledging it (`accepted`) deletes it.
