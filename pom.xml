@@ -19,7 +19,7 @@
 
 	<properties>
 		<java.version>25</java.version>
-		<qpid-jms.version>2.7.0</qpid-jms.version>
+		<qpid-jms.version>2.10.0</qpid-jms.version>
 		<archunit.version>1.4.2</archunit.version>
 	</properties>
 
