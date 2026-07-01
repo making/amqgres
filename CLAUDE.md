@@ -1,205 +1,161 @@
 # Amqgres — architecture and design notes
 
-This file records context that is not obvious from reading the source: why the broker is shaped the
-way it is, and how the pieces fit together.
+Context that is not obvious from the source: why the broker is shaped the way it is.
 
-## Why Spring Boot without the web stack
+## Spring Boot without the web stack
 
-Spring Boot is used only for dependency injection, configuration binding, `DataSource`
-auto-configuration and fat-jar / native packaging. The application runs with
-`WebApplicationType.NONE`; there is no Spring MVC or embedded servlet container. The protocol and
-I/O layers are written directly against blocking sockets and Proton-J so the code stays small and
-the request/response model of a web framework is avoided.
+Spring Boot is used only for DI, config binding, `DataSource` auto-configuration and fat-jar /
+native packaging. The app runs with `WebApplicationType.NONE` — no MVC, no servlet container. The
+protocol and I/O layers are written directly against blocking sockets and Proton-J.
 
 ## AMQP engine
 
-The AMQP 1.0 protocol is handled by Qpid Proton-J2 (`org.apache.qpid:protonj2`), used through its
-engine API. The engine is handler-driven: the connection registers open/close, sender/receiver and
-delivery handlers, and the engine invokes them as frames are decoded. Inbound bytes are fed with
-`engine.ingest`, and the engine pushes outbound bytes back through an output handler. There is no
-event queue to poll.
+AMQP 1.0 is handled by Qpid Proton-J2 (`org.apache.qpid:protonj2`) through its handler-driven engine
+API: the connection registers open/close, sender/receiver and delivery handlers; the engine invokes
+them as frames decode. Inbound bytes go in via `engine.ingest`; outbound bytes come back through an
+output handler. There is no event queue to poll.
 
-## Threading model and why the engine is single-threaded
+## Threading model (engine is single-threaded)
 
-The engine objects are not thread-safe, so all engine access for one connection is confined to a
-single "processor" thread. This is the central constraint the connection layer is built around:
+Engine objects are not thread-safe, so all engine access for one connection is confined to a single
+"processor" thread — the central constraint of the connection layer:
 
-- One acceptor (a single platform thread) hands each accepted socket to a virtual thread.
-- Per connection there are three virtual threads: a reader that only reads bytes and posts them to
-  a mailbox, the processor that owns the engine and drains the mailbox, and a heartbeat that
-  periodically posts a tick.
-- Any cross-thread interaction (heartbeat tick, wakeups from new messages) is delivered by posting a
-  task to the connection's mailbox rather than touching the engine directly.
-- The engine's output handler runs on the processor thread too, so socket writes stay single
-  threaded.
+- One acceptor (a platform thread) hands each accepted socket to a virtual thread.
+- Per connection, three virtual threads: a reader (reads bytes, posts to a mailbox), the processor
+  (owns the engine, drains the mailbox), and a heartbeat (posts a periodic tick).
+- Cross-thread interactions (heartbeat, message wakeups) post a task to the mailbox rather than
+  touching the engine. The engine's output handler also runs on the processor thread, so socket
+  writes stay single-threaded.
 
-This is why `ConnectionContext.submit` exists and why nothing outside the processor thread ever
-calls into the engine. It trades a little indirection for not needing locks around the engine.
+This is why `ConnectionContext.submit` exists and nothing off the processor thread calls the engine:
+indirection instead of locks around the engine.
 
-## Why the full message is stored, not just the body
+## Full message stored, not just the body
 
-The specification describes storing the AMQP body section in `body` and the properties in JSON
-columns. Amqgres instead stores the entire encoded message in `body` and additionally decodes
-`properties` / `application-properties` into JSONB purely for inspection and filtering.
-
-The reason is fidelity: replaying a delivery from the stored bytes reproduces the original message
-exactly, including type information (a `message-id` may be a ulong, uuid, binary or string) that
-would be lost and guessed at if the message were reassembled from JSON. The JSONB columns are a
-denormalised, best-effort copy; decoding failures never block persistence.
+The entire encoded message is stored in `body`; `properties` / `application-properties` are also
+decoded into JSONB purely for inspection and filtering. The reason is fidelity: replaying from the
+stored bytes reproduces the original exactly, including type information (a `message-id` may be
+ulong, uuid, binary or string) that would be lost if reassembled from JSON. The JSONB columns are a
+best-effort copy; decoding failures never block persistence.
 
 ## Storage backends
 
 `amqgres.storage.type` (`postgres` by default, or `sqlite`) selects the store. `MessageStore`,
-`QueueRepository` and `QueueNotifier` are interfaces with one implementation per backend. The active
-implementation is chosen by a `@Bean` factory method (one per interface, in `config`'s
-`StorageConfiguration`) that switches on `amqgres.storage.type`. `AmqpServices` and the rest of the
-connection layer depend only on the interfaces and never learn which backend is running.
+`QueueRepository` and `QueueNotifier` are interfaces with one implementation per backend, chosen by a
+`@Bean` factory method (in `config`'s `StorageConfiguration`) that switches on the property. The
+connection layer depends only on the interfaces.
 
-The selection is deliberately a factory method rather than `@ConditionalOnProperty` on each
-implementation. Bean conditions are evaluated at build time during native-image AOT, which would tie
-a native image to one backend; a factory method body runs at startup instead, so a single build (JVM
-or native) carries both backends and picks one at runtime. `NotifyListener` is likewise always
-registered but its `start()` is a no-op unless the backend is PostgreSQL. Both JDBC drivers are
-therefore always on the classpath.
+Selection is a factory method, not `@ConditionalOnProperty`, on purpose: bean conditions are
+evaluated at native-image AOT build time, which would tie a native image to one backend. A factory
+body runs at startup, so a single build (JVM or native) carries both backends and picks one at
+runtime. Likewise `NotifyListener` is always registered but its `start()` is a no-op unless the
+backend is PostgreSQL, and both JDBC drivers are always on the classpath. This was verified by
+booting one native image under each profile end-to-end; the JVM test suite does not cover the native
+binary.
 
-There are two Spring profiles, `postgres` (the default via `spring.profiles.default` in
-`application.properties`) and `sqlite`, each with its own `application-${profile}.properties`. Each
-profile file sets `amqgres.storage.type` together with its datasource, so a backend is normally
-selected by activating a profile rather than setting individual properties. The property, not the
-profile name, is what the factory methods and the schema selection key off, so tests that only need
-the store can set `amqgres.storage.type` (or activate the profile) directly.
+Two Spring profiles (`postgres`, the default via `spring.profiles.default`; and `sqlite`) each set
+`amqgres.storage.type` plus their datasource in `application-${profile}.properties`. The property,
+not the profile name, is what the factory methods and schema selection key off, so tests can set
+`amqgres.storage.type` directly. The schema is applied by Spring SQL init picking
+`schema-${platform}.sql` (`spring.sql.init.platform` = `${amqgres.storage.type}`); there is
+deliberately no plain `schema.sql`, whose fallback would run regardless of platform.
 
-The wakeup notification is a separate port, `QueueNotifier`, for the same reason: the store calls it
-after an insert but does not know how the signal reaches waiting links. PostgreSQL fans it out
-through `NOTIFY`; SQLite wakes links in the current process (see below).
+`QueueNotifier` is a separate port because the store signals after an insert but does not know how
+the signal reaches waiting links: PostgreSQL fans out via `NOTIFY`, SQLite wakes links in-process.
 
-SQLite exists because the project's convention is to back demos and single-instance deployments with
-SQLite rather than an in-memory fake. It accepts real constraints in exchange for needing no server:
+SQLite backs demos and single-instance deployments (the project's convention over an in-memory fake).
+Its constraints:
 
-- No `FOR UPDATE SKIP LOCKED`. SQLite serialises writers with a single database-level write lock, so
-  `SqliteMessageStore` locks with a plain `UPDATE ... WHERE id IN (SELECT ... LIMIT)`; two concurrent
-  consumers still get disjoint rows because their updates cannot interleave. `RETURNING` does not
-  promise row order, so the locked batch is re-sorted by id in Java to keep delivery FIFO.
-- No `LISTEN`/`NOTIFY`, so wakeups are in process only and a SQLite file must not be shared between
-  broker instances. PostgreSQL remains the choice for running several instances against one database.
+- No `FOR UPDATE SKIP LOCKED`: SQLite serialises writers with one database-level write lock, so
+  `SqliteMessageStore` locks with `UPDATE ... WHERE id IN (SELECT ... LIMIT)` and disjoint rows are
+  still guaranteed. `RETURNING` does not promise order, so the batch is re-sorted by id in Java for
+  FIFO.
+- No `LISTEN`/`NOTIFY`: wakeups are in-process only, so a SQLite file must not be shared between
+  instances. PostgreSQL remains the choice for several instances on one database.
 - SQL dialect differences (`now()` vs `datetime('now')`, `make_interval` vs a `datetime` modifier,
-  `EXISTS` returning a boolean vs an integer, no `jsonb`) are confined to the two implementations.
-
-The schema is applied by Spring's SQL init, which picks `schema-${platform}.sql`. `spring.sql.init.platform`
-is set to `${amqgres.storage.type}` in `application.properties`, so `schema-postgres.sql` or
-`schema-sqlite.sql` runs to match the active backend. There is deliberately no plain `schema.sql`,
-because the default fallback would always run it regardless of platform.
-
-Because the backend is chosen by a factory method (see above) rather than a build-time condition, one
-native image supports both backends and is switched at startup with the profile, the same as on the
-JVM. This was verified by building a single native image and booting it under each profile
-(SQLite against a file, PostgreSQL against a container) end-to-end; the JVM test suite does not cover
-the native binary.
+  `EXISTS` boolean vs integer, no `jsonb`) are confined to the two implementations.
 
 ## Queue provisioning
 
-A client can only attach to a queue that exists; the broker never declares queues from the AMQP
-wire itself, because AMQP 1.0 has no queue-declaration in its core and the `dynamic` terminus flag
-is not honoured. Queues are instead created one of two ways, and the SQLite backend is why the first
-one exists at all: a SQLite database is a local file that cannot be reached from another host, so the
-PostgreSQL "just run an INSERT from anywhere" workflow has no SQLite equivalent.
+A client can only attach to a queue that exists; the broker never declares queues from the AMQP wire
+(AMQP 1.0 has no core queue-declaration, and the `dynamic` terminus flag is not honoured). Queues are
+created two ways — both call the idempotent `QueueRepository.create` and work on either backend:
 
-- `amqgres.queue.auto-create` makes `EventDispatcher` create the queue on attach. It defaults to
-  `true`, so the out-of-the-box behaviour is that clients create queues by attaching; setting it to
-  `false` restores "reject unknown addresses with `amqp:not-found`". This is the Artemis-style
-  auto-create policy, not an AMQP protocol feature.
-- `amqgres.queue.names` seeds queues at startup. It is wired as an `ApplicationRunner` in
-  `AmqgresConfig` (the composition root) rather than inside a store, so it runs after Spring's SQL
-  init has created the schema and stays backend-independent.
+- `amqgres.queue.auto-create` (default `true`) makes `EventDispatcher` create the queue on attach.
+  Setting it `false` restores "reject unknown addresses with `amqp:not-found`". This is Artemis-style
+  auto-create, not a protocol feature. It exists mainly for SQLite: a SQLite file cannot be reached
+  from another host, so PostgreSQL's "run an INSERT from anywhere" has no SQLite equivalent.
+- `amqgres.queue.names` seeds queues at startup, wired as an `ApplicationRunner` in `AmqgresConfig`
+  (the composition root) so it runs after SQL init and stays backend-independent.
 
-Both only call `QueueRepository.create` (idempotent) and work on either backend. Tests that assert
-the refusal path pin `amqgres.queue.auto-create=false`, since the default would otherwise create the
-"unknown" queue instead of rejecting it.
+Tests asserting the refusal path pin `amqgres.queue.auto-create=false`.
 
 ## Delivery, acknowledgement and redelivery
 
-- A confirmed (accepted) message is represented by deleting its row, so the table only holds
-  `ready` and `locked` rows and does not grow with delivered messages.
-- The message id is carried in the AMQP delivery tag, so handling a disposition needs no per-link
-  bookkeeping — the id is read back from the tag.
-- Locks are recovered by a periodic job rather than during connection teardown. Abrupt
-  disconnects therefore need no special handling: the reclaim job returns stale `locked` rows to
-  `ready`.
+- A confirmed (accepted) message is represented by deleting its row, so the table holds only `ready`
+  and `locked` rows.
+- The message id travels in the AMQP delivery tag, so dispositions need no per-link bookkeeping.
+- Locks are recovered by a periodic reclaim job (stale `locked` rows → `ready`), not at teardown, so
+  abrupt disconnects need no special handling.
 
-## LISTEN/NOTIFY wakeup path (PostgreSQL)
+## LISTEN/NOTIFY wakeup path
 
-When a consumer holds credit but the queue is empty, its sender link is registered as waiting in a
-shared registry keyed by queue name. This registry is backend-independent; only how a link is woken
-differs. On PostgreSQL, new messages issue `NOTIFY amqgres_queue` (via `PostgresQueueNotifier`) with
-the queue name as payload, and a single listener thread wakes the waiting links, which re-run
-delivery on their own connection threads. On SQLite, `LocalQueueNotifier` wakes the registered links
-directly in process; waking only posts a task to each link's connection thread, so it never touches
-another connection's engine off-thread.
+A consumer holding credit against an empty queue registers its sender link as waiting in a
+backend-independent registry keyed by queue name; only the wakeup differs. PostgreSQL issues
+`NOTIFY amqgres_queue` (via `PostgresQueueNotifier`) with the queue name as payload, and a single
+listener thread wakes the waiting links, which re-run delivery on their own connection threads.
+SQLite's `LocalQueueNotifier` wakes them in-process — posting a task to each link's connection thread,
+never touching another connection's engine off-thread.
 
-The listener uses a dedicated connection created through `DriverManager` rather than one borrowed
-from HikariCP. A pooled connection blocked indefinitely in `getNotifications` would permanently
-remove capacity from the pool, so the notify connection is kept outside it while still using the
-same `spring.datasource.*` settings (via `JdbcConnectionDetails`).
+Two PostgreSQL-specific choices:
 
-A single fixed channel is used instead of one channel per queue to keep `LISTEN` management simple;
-the queue name travels in the notification payload.
+- The listener uses a dedicated `DriverManager` connection, not a pooled one: a pooled connection
+  blocked in `getNotifications` would permanently remove capacity from the pool. It still uses the
+  `spring.datasource.*` settings via `JdbcConnectionDetails`.
+- A single fixed channel (not one per queue) keeps `LISTEN` simple; the queue name travels in the
+  payload.
+- `pg_notify` on the write side runs with a `RowMapper` (`query(...).list()`), never `query().rowSet()`:
+  `rowSet()` materialises a `CachedRowSet` whose provider lookup hangs under GraalVM native image. No
+  `SqlRowSet` is used anywhere.
 
-The `pg_notify` on the write side is run with a `RowMapper` (`query(...).list()`), not
-`query().rowSet()`. `rowSet()` materialises a `javax.sql.rowset` `CachedRowSet`, and its provider
-lookup hangs indefinitely under GraalVM native image (it works on the JVM). Only the row-mapper and
-update paths are native-safe, so no `SqlRowSet` is used anywhere in the broker.
-
-## Package layout
-
-Packages are organised by feature, not by technical layer:
+## Package layout — by feature, not layer
 
 - `connection` — acceptor, per-connection loop, event dispatch, link registry.
-- `queue` — queue registry (`QueueRepository` and its per-backend implementations).
+- `queue` — queue registry (`QueueRepository` + per-backend implementations).
 - `message` — persistence, delivery locking, redelivery, lock reclaim, wire codec, and the
   `QueueNotifier` port. `MessageStore` and `QueueNotifier` are interfaces implemented per backend.
-- `notify` — the wakeup adapters: the PostgreSQL `LISTEN` listener plus both `QueueNotifier`
-  implementations (`PostgresQueueNotifier`, `LocalQueueNotifier`).
-- `config` — the composition root: infrastructure beans (`AmqgresConfig`) and
-  `StorageConfiguration`, which wires the per-backend storage beans.
+- `notify` — wakeup adapters: the PostgreSQL `LISTEN` listener plus `PostgresQueueNotifier` and
+  `LocalQueueNotifier`.
+- `config` — composition root: `AmqgresConfig` and `StorageConfiguration`.
 
-`config` is the composition root and may depend on the feature packages (`StorageConfiguration`
-constructs their implementations), but nothing may depend on `config`. `AmqgresProperties` therefore
-lives in the top-level package (`com.example.amqgres`), not in `config`, so that the feature packages
-can read configuration without depending on the composition root. Among the feature slices, `notify`
-depends on `connection` (to wake links) and on `message` (it implements `QueueNotifier`), and
-`connection` depends on `queue` and `message`; there are no cycles. Both properties — no slice cycles
-and no dependencies on `config` from outside it — are enforced by `PackageArchitectureTest` (ArchUnit).
+`config` may depend on the feature packages, but nothing may depend on `config` — so `AmqgresProperties`
+lives in the top-level `com.example.amqgres`, letting feature packages read config without depending
+on the root. Among slices: `notify` depends on `connection` and `message`; `connection` depends on
+`queue` and `message`; no cycles. Both properties are enforced by `PackageArchitectureTest` (ArchUnit).
 
 ## End-to-end tests run against both backends
 
-An end-to-end test that drives the broker over AMQP exercises behaviour that must hold on both
-storage backends, so it is written as three files rather than one, and never as a single class
-pinned to one backend:
+An end-to-end test that drives the broker over AMQP must hold on both backends, so it is three files,
+never one class pinned to a backend:
 
-- `Abstract<Name>Test` holds the whole scenario — the `@SpringBootTest` properties, the JMS
-  interactions and the assertions — but is `abstract` and carries no backend wiring, so JUnit does
-  not run it directly.
-- `Postgres<Name>Test extends Abstract<Name>Test` adds only `@Import(TestcontainersConfiguration.class)`,
-  running the scenario against PostgreSQL on the default profile.
-- `Sqlite<Name>Test extends Abstract<Name>Test` adds only `@ActiveProfiles("sqlite")` and the
-  `@DynamicPropertySource` that points `spring.datasource.url` at a `@TempDir` SQLite file.
+- `Abstract<Name>Test` — the whole scenario (`@SpringBootTest` properties, JMS interactions,
+  assertions), `abstract` with no backend wiring so JUnit skips it.
+- `Postgres<Name>Test` — adds only `@Import(TestcontainersConfiguration.class)` (default profile).
+- `Sqlite<Name>Test` — adds only `@ActiveProfiles("sqlite")` and a `@DynamicPropertySource` pointing
+  `spring.datasource.url` at a `@TempDir` SQLite file.
 
-The base class stays backend-agnostic. Where a scenario genuinely needs backend-specific SQL — for
-example back-dating `locked_at` to trigger lock reclaim, which is `now() - interval` on PostgreSQL
-but `datetime('now', ...)` on SQLite — the base class declares a small `protected abstract` hook
-(e.g. `backdatedLockedAt()`) that each subclass implements, rather than branching on the backend
-inside the shared test. The `AmqpIntegrationTest`, `ReadmeConnectingClientIntegrationTest`,
-`QueueProvisioningTest` and `DeadLetterQueueIntegrationTest` families all follow this shape; copy an
-existing trio when adding a new end-to-end test. Store-level unit tests (`MessageStoreTest` /
-`SqliteMessageStoreTest`) are a separate pair per backend and do not share a base class, because they
-assert against the store implementations directly rather than through the wire.
+Where a scenario needs backend-specific SQL (e.g. back-dating `locked_at` for lock reclaim,
+`now() - interval` vs `datetime('now', ...)`), the base declares a `protected abstract` hook (e.g.
+`backdatedLockedAt()`) each subclass implements, rather than branching on the backend. The
+`AmqpIntegrationTest`, `ReadmeConnectingClientIntegrationTest`, `QueueProvisioningTest` and
+`DeadLetterQueueIntegrationTest` families all follow this shape — copy an existing trio. Store-level
+unit tests (`MessageStoreTest` / `SqliteMessageStoreTest`) are a separate pair with no shared base,
+asserting against the stores directly.
 
 ## Working on the code
 
-- Run the tests with `./mvnw test`. They start PostgreSQL through Testcontainers and drive the
-  broker end-to-end with the Qpid JMS client, so a Docker daemon must be available.
-- Null-safety is enforced at compile time by NullAway (via `nullability-maven-plugin`); `mvn
-  compile` fails on violations. Prefer null-free designs and add `@Nullable` only where null is
-  genuinely required.
-- Formatting is enforced by Spring Java Format; run `./mvnw spring-javaformat:apply` before
-  committing.
+- `./mvnw test` — starts PostgreSQL via Testcontainers and drives the broker with the Qpid JMS
+  client, so a Docker daemon must be available.
+- Null-safety is enforced at compile time by NullAway (`nullability-maven-plugin`); `mvn compile`
+  fails on violations. Add `@Nullable` only where null is genuinely required.
+- `./mvnw spring-javaformat:apply` before committing.
