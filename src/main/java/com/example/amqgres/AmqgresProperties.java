@@ -1,5 +1,7 @@
 package com.example.amqgres;
 
+import java.util.List;
+
 import org.jspecify.annotations.Nullable;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -14,7 +16,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  */
 @ConfigurationProperties(prefix = "amqgres")
 public record AmqgresProperties(@DefaultValue Storage storage, @DefaultValue Listen listen, @DefaultValue Link link,
-		@DefaultValue Redelivery redelivery, @DefaultValue Lock lock, @DefaultValue Tls tls, @DefaultValue Sasl sasl) {
+		@DefaultValue Queue queue, @DefaultValue Redelivery redelivery, @DefaultValue Lock lock, @DefaultValue Tls tls,
+		@DefaultValue Sasl sasl) {
 
 	/**
 	 * Selects which storage backend persists queues and messages. Factory beans switch on
@@ -55,6 +58,21 @@ public record AmqgresProperties(@DefaultValue Storage storage, @DefaultValue Lis
 	 * Link level tuning.
 	 */
 	public record Link(@DefaultValue("100") int initialCredit) {
+	}
+
+	/**
+	 * Queue provisioning. Queues are normally registered out of band by inserting into
+	 * the {@code queues} table, but for single-instance deployments (typically SQLite,
+	 * where the database file is local to the broker) these options let queues be
+	 * provisioned through the broker itself.
+	 *
+	 * @param autoCreate when {@code true}, attaching to an unknown address creates the
+	 * queue instead of rejecting the attach with {@code amqp:not-found}; disabled by
+	 * default so an unregistered address is refused
+	 * @param names queue names created at startup if they do not already exist; applies
+	 * to every backend
+	 */
+	public record Queue(@DefaultValue("false") boolean autoCreate, @DefaultValue List<String> names) {
 	}
 
 	/**

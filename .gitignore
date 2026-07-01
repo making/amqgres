@@ -34,3 +34,8 @@ build/
 
 ### Project ###
 spec.md
+
+# Local SQLite database files
+amqgres.db
+amqgres.db-shm
+amqgres.db-wal

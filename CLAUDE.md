@@ -96,6 +96,24 @@ JVM. This was verified by building a single native image and booting it under ea
 (SQLite against a file, PostgreSQL against a container) end-to-end; the JVM test suite does not cover
 the native binary.
 
+## Queue provisioning
+
+Queues are pre-registered by default and an attach to an unknown address is refused with
+`amqp:not-found`; the broker never declares queues from the AMQP wire itself, because AMQP 1.0 has
+no queue-declaration in its core and the `dynamic` terminus flag is not honoured. Two opt-in paths
+exist because a SQLite database is a local file that cannot be reached from another host, so the
+PostgreSQL "just run an INSERT from anywhere" workflow has no SQLite equivalent:
+
+- `amqgres.queue.names` seeds queues at startup. It is wired as an `ApplicationRunner` in
+  `AmqgresConfig` (the composition root) rather than inside a store, so it runs after Spring's SQL
+  init has created the schema and stays backend-independent.
+- `amqgres.queue.auto-create` makes `EventDispatcher` create the queue on attach instead of
+  refusing it. It is off by default so the safe behaviour remains "reject unknown addresses"; it is
+  the Artemis-style auto-create policy, not an AMQP protocol feature.
+
+Both are backend-independent (they only call `QueueRepository.create`, which is idempotent) but are
+motivated by SQLite; PostgreSQL deployments normally keep them off and register queues out of band.
+
 ## Delivery, acknowledgement and redelivery
 
 - A confirmed (accepted) message is represented by deleting its row, so the table only holds

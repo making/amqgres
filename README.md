@@ -27,15 +27,31 @@ priority and scheduled delivery, and any management web interface.
 ### 1. Prepare the database
 
 Point Amqgres at a database. The tables and indexes are created automatically on startup
-(`schema-postgres.sql` or `schema-sqlite.sql`, selected by the storage backend). Queues must be
-registered before clients can attach to them; attaching to an unknown address is refused with
-`amqp:not-found`.
+(`schema-postgres.sql` or `schema-sqlite.sql`, selected by the storage backend). By default queues
+must be registered before clients can attach to them; attaching to an unknown address is refused
+with `amqp:not-found`.
 
 Register a queue by inserting into the `queues` table:
 
 ```sql
 INSERT INTO queues(name) VALUES ('orders');
 ```
+
+With PostgreSQL this can be done from any host that can reach the database. A SQLite database is a
+local file that only the broker's host can open, so two properties let queues be provisioned through
+the broker instead:
+
+```properties
+# Create these queues at startup if they do not already exist (any backend).
+amqgres.queue.names=orders,events
+# Create a queue on demand when a client attaches to an unknown address, instead of
+# refusing the attach with amqp:not-found. Disabled by default.
+amqgres.queue.auto-create=true
+```
+
+Both are backend independent, but they exist mainly for single-instance SQLite deployments where
+out-of-band SQL is inconvenient. Leave `auto-create` off when clients should only reach
+pre-registered queues.
 
 ### 2. Configure
 
@@ -51,6 +67,10 @@ amqgres.listen.host=0.0.0.0
 amqgres.listen.port=5672
 # Credit granted to producers.
 amqgres.link.initial-credit=100
+# Queues created at startup if missing; empty by default.
+amqgres.queue.names=
+# Create a queue when a client attaches to an unknown address.
+amqgres.queue.auto-create=false
 # Deliveries before a message is dead-lettered.
 amqgres.redelivery.max-count=5
 # Optional dead-letter queue; if unset, exhausted messages are deleted.

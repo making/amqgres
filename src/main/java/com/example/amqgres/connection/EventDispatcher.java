@@ -76,7 +76,7 @@ public class EventDispatcher {
 	private void onReceiverOpen(Receiver receiver) {
 		// The remote is a producer: our local end is a receiver.
 		String address = targetAddress(receiver);
-		if (address == null || !this.services.queues().exists(address)) {
+		if (address == null || !resolveQueue(address)) {
 			refuse(receiver, address);
 			return;
 		}
@@ -93,7 +93,7 @@ public class EventDispatcher {
 	private void onSenderOpen(Sender sender) {
 		// The remote is a consumer: our local end is a sender.
 		String address = sourceAddress(sender);
-		if (address == null || !this.services.queues().exists(address)) {
+		if (address == null || !resolveQueue(address)) {
 			refuse(sender, address);
 			return;
 		}
@@ -198,6 +198,27 @@ public class EventDispatcher {
 			this.services.links().unregister(state.pending);
 			state.pending = null;
 		}
+	}
+
+	/**
+	 * Resolves the queue an attach targets, creating it when it is unknown and
+	 * auto-create is enabled. Returns {@code false} for an unknown queue while
+	 * auto-create is disabled, in which case the caller refuses the attach with
+	 * {@code amqp:not-found}.
+	 * @param address the requested queue name
+	 * @return {@code true} if the queue exists (or was just created) and the attach may
+	 * proceed
+	 */
+	private boolean resolveQueue(String address) {
+		if (this.services.queues().exists(address)) {
+			return true;
+		}
+		if (!this.services.properties().queue().autoCreate()) {
+			return false;
+		}
+		this.services.queues().create(address);
+		log.info("Auto-created queue '{}' on attach", address);
+		return true;
 	}
 
 	private void refuse(Link<?> link, @Nullable String address) {
