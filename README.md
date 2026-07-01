@@ -153,6 +153,29 @@ Delivery semantics:
 - If a consumer disconnects without acknowledging, the message lock expires after
   `lock.timeout-seconds` and the message becomes deliverable again.
 
+## Building a native executable
+
+With a GraalVM JDK, build a native image with the `native` profile:
+
+```shell
+./mvnw -Pnative native:compile
+./target/amqgres
+```
+
+A single native image supports both backends; the backend is chosen at startup with the profile,
+exactly as on the JVM:
+
+```shell
+./mvnw -Pnative native:compile
+./target/amqgres --spring.profiles.active=sqlite
+./target/amqgres --spring.profiles.active=postgres
+```
+
+Both JDBC drivers are included, and the storage beans are picked by a factory that runs at startup
+rather than by build-time conditions, so no backend-specific build is needed. The bundled SQLite
+driver (`sqlite-jdbc`) ships GraalVM reachability metadata, so no manual native configuration is
+required either.
+
 ## Sending and receiving from the command line
 
 Because Amqgres speaks plain AMQP 1.0, any AMQP 1.0 client works as a quick smoke test. The
@@ -169,7 +192,7 @@ tar xzf apache-artemis-2.44.0-bin.tar.gz
 export PATH="$PWD/apache-artemis-2.44.0/bin:$PATH"
 ```
 
-Start the broker with a queue named `demo` (SQLite, no server needed):
+Start the broker (built above) with a queue named `demo` (SQLite, no server needed):
 
 ```shell
 ./target/amqgres --spring.profiles.active=sqlite --amqgres.queue.names=demo
@@ -201,29 +224,6 @@ artemis consumer \
 The consumer acknowledges each message, so a second run returns nothing until new messages are sent.
 Omitting `--amqgres.queue.names=demo` also works while `amqgres.queue.auto-create` is enabled
 (the default): the queue is created the first time the producer attaches.
-
-## Building a native executable
-
-With a GraalVM JDK, build a native image with the `native` profile:
-
-```shell
-./mvnw -Pnative native:compile
-./target/amqgres
-```
-
-A single native image supports both backends; the backend is chosen at startup with the profile,
-exactly as on the JVM:
-
-```shell
-./mvnw -Pnative native:compile
-./target/amqgres --spring.profiles.active=sqlite
-./target/amqgres --spring.profiles.active=postgres
-```
-
-Both JDBC drivers are included, and the storage beans are picked by a factory that runs at startup
-rather than by build-time conditions, so no backend-specific build is needed. The bundled SQLite
-driver (`sqlite-jdbc`) ships GraalVM reachability metadata, so no manual native configuration is
-required either.
 
 ## Running the tests
 
