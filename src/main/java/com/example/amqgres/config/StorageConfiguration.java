@@ -9,8 +9,11 @@ import com.example.amqgres.message.SqliteMessageStore;
 import com.example.amqgres.notify.LocalQueueNotifier;
 import com.example.amqgres.notify.PostgresQueueNotifier;
 import com.example.amqgres.queue.PostgresQueueRepository;
+import com.example.amqgres.queue.PostgresSubscriptionRepository;
 import com.example.amqgres.queue.QueueRepository;
 import com.example.amqgres.queue.SqliteQueueRepository;
+import com.example.amqgres.queue.SqliteSubscriptionRepository;
+import com.example.amqgres.queue.SubscriptionRepository;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -38,6 +41,20 @@ public class StorageConfiguration {
 		return switch (properties.storage().type()) {
 			case POSTGRES -> new PostgresQueueRepository(jdbcClient);
 			case SQLITE -> new SqliteQueueRepository(jdbcClient);
+		};
+	}
+
+	/**
+	 * Creates the subscription repository for the active backend.
+	 * @param jdbcClient the shared JDBC client
+	 * @param properties the broker configuration
+	 * @return the backend specific repository
+	 */
+	@Bean
+	public SubscriptionRepository subscriptionRepository(JdbcClient jdbcClient, AmqgresProperties properties) {
+		return switch (properties.storage().type()) {
+			case POSTGRES -> new PostgresSubscriptionRepository(jdbcClient);
+			case SQLITE -> new SqliteSubscriptionRepository(jdbcClient);
 		};
 	}
 

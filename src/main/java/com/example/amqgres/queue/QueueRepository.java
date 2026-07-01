@@ -24,4 +24,11 @@ public interface QueueRepository {
 	 */
 	void create(String name);
 
+	/**
+	 * Removes a queue. Used to tear down a subscription's backing queue; callers first
+	 * remove its messages and any subscription binding, since those reference the queue.
+	 * @param name the queue name
+	 */
+	void delete(String name);
+
 }

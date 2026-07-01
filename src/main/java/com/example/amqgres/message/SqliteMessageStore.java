@@ -122,4 +122,9 @@ public class SqliteMessageStore implements MessageStore {
 				""").param("interval", "-" + timeoutSeconds + " seconds").update();
 	}
 
+	@Override
+	public void purgeQueue(String queueName) {
+		this.jdbcClient.sql("DELETE FROM messages WHERE queue_name = :queue").param("queue", queueName).update();
+	}
+
 }

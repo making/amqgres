@@ -98,6 +98,39 @@ Tests asserting the refusal path pin `amqgres.queue.auto-create=false`.
 - Locks are recovered by a periodic reclaim job (stale `locked` rows → `ready`), not at teardown, so
   abrupt disconnects need no special handling.
 
+## Publish/subscribe (topics)
+
+Topics are modelled the Artemis way, which maps cleanly onto the existing queue machinery: a topic
+has no storage of its own; each subscription is an ordinary queue, and publishing fans a copy of the
+message into every subscription queue bound to the topic (`EventDispatcher.fanOut`). Delivery,
+locking, acknowledgement, redelivery and lock reclaim are then exactly the queue path, per
+subscription — no second delivery mechanism.
+
+- `subscriptions(queue_name, topic_name, durable)` records the bindings; `SubscriptionRepository`
+  (one impl per backend, chosen by the same `StorageConfiguration` factory) reads them for fan-out
+  and writes them on attach. The subscription queue is a real row in `queues`, so fan-out `insert`
+  and its `notifyQueue` are reused unchanged; with no subscriptions a publish is simply dropped.
+- Queue vs topic is decided by the terminus, not the address: `TerminusResolver` (interface, with the
+  capability-based `JmsTerminusResolver`) turns a `Source`/`Target` into either a queue name or a
+  `Subscription`. This is a deliberate seam — a generic AMQP 1.0 client (e.g. Spring AMQP, which
+  sends no `topic` capability) can be supported later by an address-driven resolver without touching
+  `EventDispatcher`. `amqgres.topic.names` exists as the address-based hook.
+- Subscription naming follows Artemis (`SubscriptionNaming`): a durable subscription's queue is
+  `clientId.subscriptionName` (stable across reconnects, so offline messages accumulate); a
+  non-durable one is `nonDurable.connectionId.linkName` (private to the link).
+- Lifecycle keys off the AMQP close/detach split (separate Proton-J2 handlers): a durable
+  subscription survives a plain detach (goes offline) and is removed only on an explicit close
+  (`closed=true` — JMS `unsubscribe`); a non-durable one is removed on either. Non-durable
+  subscriptions are also tracked per connection and dropped when the connection terminates
+  (`EventDispatcher.cleanUp`, invoked from `ConnectionHandler`'s teardown), so an abrupt drop cannot
+  leak them.
+- JMS `unsubscribe` re-attaches the durable link by name with a **null source terminus**; the broker
+  recovers the stored topic (`SubscriptionRepository.topicFor`) and echoes back a reconstructed
+  `Source` so the client's open completes, then the client's `closed=true` detach removes the
+  subscription through the normal teardown path (`EventDispatcher.recoverDurableSubscription`).
+
+Message selectors, shared subscriptions and exchange/binding routing are out of scope (see `.todo/`).
+
 ## LISTEN/NOTIFY wakeup path
 
 A consumer holding credit against an empty queue registers its sender link as waiting in a
@@ -120,8 +153,10 @@ Two PostgreSQL-specific choices:
 
 ## Package layout — by feature, not layer
 
-- `connection` — acceptor, per-connection loop, event dispatch, link registry.
-- `queue` — queue registry (`QueueRepository` + per-backend implementations).
+- `connection` — acceptor, per-connection loop, event dispatch, link registry, and terminus
+  resolution (`TerminusResolver` + `JmsTerminusResolver`, `SubscriptionNaming`).
+- `queue` — queue registry (`QueueRepository`) and topic subscription bindings
+  (`SubscriptionRepository`), each with per-backend implementations.
 - `message` — persistence, delivery locking, redelivery, lock reclaim, wire codec, and the
   `QueueNotifier` port. `MessageStore` and `QueueNotifier` are interfaces implemented per backend.
 - `notify` — wakeup adapters: the PostgreSQL `LISTEN` listener plus `PostgresQueueNotifier` and
@@ -147,8 +182,9 @@ never one class pinned to a backend:
 Where a scenario needs backend-specific SQL (e.g. back-dating `locked_at` for lock reclaim,
 `now() - interval` vs `datetime('now', ...)`), the base declares a `protected abstract` hook (e.g.
 `backdatedLockedAt()`) each subclass implements, rather than branching on the backend. The
-`AmqpIntegrationTest`, `ReadmeConnectingClientIntegrationTest`, `QueueProvisioningTest` and
-`DeadLetterQueueIntegrationTest` families all follow this shape — copy an existing trio. Store-level
+`AmqpIntegrationTest`, `ReadmeConnectingClientIntegrationTest`, `QueueProvisioningTest`,
+`DeadLetterQueueIntegrationTest` and `TopicPubSubTest` families all follow this shape — copy an
+existing trio. Store-level
 unit tests (`MessageStoreTest` / `SqliteMessageStoreTest`) are a separate pair with no shared base,
 asserting against the stores directly.
 

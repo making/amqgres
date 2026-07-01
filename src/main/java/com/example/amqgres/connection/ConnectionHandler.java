@@ -60,6 +60,8 @@ public final class ConnectionHandler implements ConnectionContext, Runnable {
 
 	private @Nullable OutputStream out;
 
+	private @Nullable EventDispatcher dispatcher;
+
 	public ConnectionHandler(Socket socket, AmqpServices services) {
 		this.socket = socket;
 		this.services = services;
@@ -82,7 +84,9 @@ public final class ConnectionHandler implements ConnectionContext, Runnable {
 			engine.errorHandler((failed) -> requestStop());
 			engine.shutdownHandler((stopped) -> requestStop());
 			engine.saslDriver().server().setListener(new SaslApprovals());
-			new EventDispatcher(this.services, this).install(engine.connection());
+			EventDispatcher eventDispatcher = new EventDispatcher(this.services, this);
+			eventDispatcher.install(engine.connection());
+			this.dispatcher = eventDispatcher;
 
 			this.running = true;
 			engine.start();
@@ -96,6 +100,7 @@ public final class ConnectionHandler implements ConnectionContext, Runnable {
 		}
 		finally {
 			this.running = false;
+			cleanUpSubscriptions();
 			heartbeat.stop();
 			if (reader != null) {
 				reader.interrupt();
@@ -104,6 +109,19 @@ public final class ConnectionHandler implements ConnectionContext, Runnable {
 				heartbeatThread.interrupt();
 			}
 			log.info("Connection {} closed", this.connectionId);
+		}
+	}
+
+	private void cleanUpSubscriptions() {
+		EventDispatcher active = this.dispatcher;
+		if (active == null) {
+			return;
+		}
+		try {
+			active.cleanUp();
+		}
+		catch (RuntimeException ex) {
+			log.warn("Connection {} subscription cleanup failed", this.connectionId, ex);
 		}
 	}
 

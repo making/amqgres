@@ -118,4 +118,9 @@ public class PostgresMessageStore implements MessageStore {
 				""").param("timeout", timeoutSeconds).update();
 	}
 
+	@Override
+	public void purgeQueue(String queueName) {
+		this.jdbcClient.sql("DELETE FROM messages WHERE queue_name = :queue").param("queue", queueName).update();
+	}
+
 }

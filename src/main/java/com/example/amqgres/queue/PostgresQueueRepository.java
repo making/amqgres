@@ -31,4 +31,9 @@ public class PostgresQueueRepository implements QueueRepository {
 			.update();
 	}
 
+	@Override
+	public void delete(String name) {
+		this.jdbcClient.sql("DELETE FROM queues WHERE name = :name").param("name", name).update();
+	}
+
 }

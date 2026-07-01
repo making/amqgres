@@ -4,6 +4,7 @@ import com.example.amqgres.AmqgresProperties;
 import com.example.amqgres.message.MessageCodec;
 import com.example.amqgres.message.MessageStore;
 import com.example.amqgres.queue.QueueRepository;
+import com.example.amqgres.queue.SubscriptionRepository;
 
 import org.springframework.stereotype.Component;
 
@@ -15,6 +16,6 @@ import org.springframework.stereotype.Component;
  * small and avoids threading many constructor arguments through the connection layer.
  */
 @Component
-public record AmqpServices(QueueRepository queues, MessageStore messages, MessageCodec codec, LinkRegistry links,
-		AmqgresProperties properties) {
+public record AmqpServices(QueueRepository queues, SubscriptionRepository subscriptions, MessageStore messages,
+		MessageCodec codec, LinkRegistry links, TerminusResolver terminusResolver, AmqgresProperties properties) {
 }

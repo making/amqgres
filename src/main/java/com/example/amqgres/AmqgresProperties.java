@@ -16,8 +16,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  */
 @ConfigurationProperties(prefix = "amqgres")
 public record AmqgresProperties(@DefaultValue Storage storage, @DefaultValue Listen listen, @DefaultValue Link link,
-		@DefaultValue Queue queue, @DefaultValue Redelivery redelivery, @DefaultValue Lock lock, @DefaultValue Tls tls,
-		@DefaultValue Sasl sasl) {
+		@DefaultValue Queue queue, @DefaultValue Topic topic, @DefaultValue Redelivery redelivery,
+		@DefaultValue Lock lock, @DefaultValue Tls tls, @DefaultValue Sasl sasl) {
 
 	/**
 	 * Selects which storage backend persists queues and messages. Factory beans switch on
@@ -73,6 +73,20 @@ public record AmqgresProperties(@DefaultValue Storage storage, @DefaultValue Lis
 	 * to every backend
 	 */
 	public record Queue(@DefaultValue("true") boolean autoCreate, @DefaultValue List<String> names) {
+	}
+
+	/**
+	 * Topic (publish/subscribe) provisioning. A topic has no backing row of its own; it
+	 * exists implicitly as the set of subscription queues bound to it. These options
+	 * govern whether an attach may reference a topic the broker has not been told about.
+	 *
+	 * @param autoCreate when {@code true} (the default), attaching to any topic address
+	 * is allowed; set to {@code false} to restrict topics to those listed in
+	 * {@code names}
+	 * @param names topic names that are always accepted, even when {@code autoCreate} is
+	 * {@code false}
+	 */
+	public record Topic(@DefaultValue("true") boolean autoCreate, @DefaultValue List<String> names) {
 	}
 
 	/**

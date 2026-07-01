@@ -68,6 +68,13 @@ public interface MessageStore {
 	int reclaimExpiredLocks(int timeoutSeconds);
 
 	/**
+	 * Deletes every message on a queue. Used when tearing down a subscription's backing
+	 * queue, whose accumulated messages must be removed before the queue itself.
+	 * @param queueName the queue to empty
+	 */
+	void purgeQueue(String queueName);
+
+	/**
 	 * A message locked for delivery.
 	 */
 	record LockedMessage(long id, byte[] body, int deliveryCount) {

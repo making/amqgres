@@ -23,3 +23,13 @@ CREATE INDEX IF NOT EXISTS idx_messages_ready
 CREATE INDEX IF NOT EXISTS idx_messages_locked_stale
     ON messages (locked_at)
     WHERE state = 'locked';
+
+CREATE TABLE IF NOT EXISTS subscriptions (
+    queue_name  TEXT PRIMARY KEY REFERENCES queues(name),
+    topic_name  TEXT NOT NULL,
+    durable     BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_subscriptions_topic
+    ON subscriptions (topic_name);

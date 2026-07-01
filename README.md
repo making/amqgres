@@ -2,8 +2,8 @@
 
 Amqgres is a small AMQP 1.0 message broker that stores its messages in a SQL database. It runs on
 PostgreSQL by default and can also run on SQLite for local development or single-instance
-deployments. It provides point-to-point queues for AMQP 1.0 clients (Qpid JMS, AMQP.NET Lite,
-Rhea.js and others) without requiring any additional messaging middleware.
+deployments. It provides point-to-point queues and publish/subscribe topics for AMQP 1.0 clients
+(Qpid JMS, AMQP.NET Lite, Rhea.js and others) without requiring any additional messaging middleware.
 
 ## When to use it
 
@@ -11,11 +11,12 @@ Use Amqgres when:
 
 - You already run PostgreSQL and want queueing without adding Kafka, RabbitMQ or similar.
 - You need point-to-point (work queue) semantics with at-least-once delivery.
+- You need publish/subscribe: JMS topics with non-durable and durable subscriptions.
 - You want a small, self-contained broker that starts as a single executable.
 
-It is intentionally limited. The following are out of scope: AMQP transactions, publish/subscribe
-and topic routing, clustering and horizontal scaling, protocols other than AMQP 1.0, message
-priority and scheduled delivery, and any management web interface.
+It is intentionally limited. The following are out of scope: AMQP transactions, message selectors and
+shared subscriptions, exchange/binding routing, clustering and horizontal scaling, protocols other
+than AMQP 1.0, message priority and scheduled delivery, and any management web interface.
 
 ## Requirements
 
@@ -76,6 +77,10 @@ amqgres.link.initial-credit=100
 amqgres.queue.auto-create=true
 # Queues created at startup if missing; empty by default.
 amqgres.queue.names=
+# Allow attaching to any topic address (publish/subscribe).
+amqgres.topic.auto-create=true
+# Topics always accepted when auto-create is off; empty by default.
+amqgres.topic.names=
 # Deliveries before a message is dead-lettered.
 amqgres.redelivery.max-count=5
 # Optional dead-letter queue; if unset, exhausted messages are deleted.
@@ -214,6 +219,43 @@ Delivery semantics:
 - If a consumer disconnects without acknowledging, the message lock expires after
   `lock.timeout-seconds` and the message becomes deliverable again.
 
+## Publish/subscribe with topics
+
+A topic delivers a copy of every published message to each subscription, rather than sharing
+messages between competing consumers as a queue does. Use `session.createTopic(...)` and the broker
+recognises it as a topic (from the AMQP terminus the Qpid JMS client sends); no separate declaration
+is needed.
+
+```java
+JmsConnectionFactory factory = new JmsConnectionFactory("amqp://localhost:5672");
+try (Connection connection = factory.createConnection()) {
+    connection.start();
+    Session session = connection.createSession(Session.AUTO_ACKNOWLEDGE);
+    Topic topic = session.createTopic("news");
+
+    // Every consumer attached to the topic receives its own copy of each message.
+    MessageConsumer subscriber = session.createConsumer(topic);
+    session.createProducer(topic).send(session.createTextMessage("breaking"));
+    Message message = subscriber.receive(5000);
+}
+```
+
+Two kinds of subscription are supported:
+
+- **Non-durable** (`createConsumer`) — private to the consumer and only receives messages published
+  while it is connected. Its state is discarded when the consumer or connection closes.
+- **Durable** (`createDurableSubscriber`, requires `Connection.setClientID`) — identified by client
+  id and subscription name, it keeps accumulating messages while the subscriber is offline and
+  redelivers them on reconnect. `Session.unsubscribe(name)` removes it.
+
+Internally a subscription is an ordinary queue that the topic fans messages out to, so all the queue
+delivery semantics above (locking, acknowledgement, redelivery, dead-lettering) apply per
+subscription. Publishing to a topic with no subscriptions simply drops the message.
+
+`amqgres.topic.auto-create` (default `true`) allows attaching to any topic address; set it to `false`
+to restrict topics to those listed in `amqgres.topic.names`. Message selectors and shared
+subscriptions are not supported.
+
 ## Sending and receiving from the command line
 
 Because Amqgres speaks plain AMQP 1.0, any AMQP 1.0 client works as a quick smoke test. The
@@ -270,6 +312,36 @@ message it receives, so a second run returns nothing until new messages are sent
 caps a single run at 1000 messages; pass a larger `--message-count` to drain a bigger backlog.)
 Omitting `--amqgres.queue.names=demo` also works while `amqgres.queue.auto-create` is enabled
 (the default): the queue is created the first time the producer attaches.
+
+### Publish/subscribe to a topic
+
+A `topic://` destination exercises the publish/subscribe path instead of a queue. The important
+difference is ordering: a non-durable subscription only receives messages published while it is
+connected, so the consumer must be started **before** the producer. Each connected consumer receives
+its own copy of every message.
+
+Start two consumers on `topic://news` in the background, each waiting up to 10 seconds for three
+messages:
+
+```shell
+artemis consumer --protocol AMQP --url amqp://localhost:5672 \
+  --destination topic://news --message-count 3 --receive-timeout 10000 --verbose &
+artemis consumer --protocol AMQP --url amqp://localhost:5672 \
+  --destination topic://news --message-count 3 --receive-timeout 10000 --verbose &
+```
+
+Then publish three messages to the same topic:
+
+```shell
+artemis producer --protocol AMQP --url amqp://localhost:5672 \
+  --destination topic://news --message "Hello topic" --message-count 3
+```
+
+Both consumers print `Consumer news, thread=0 Consumed: 3 messages` — the three messages are
+fanned out to each subscriber rather than shared between them. Publishing to a topic that no
+consumer is subscribed to simply drops the messages. Topics need no pre-registration; unlike queues
+they are not created in the `queues` table, and `amqgres.topic.auto-create` (default `true`) allows
+attaching to any topic address.
 
 ## Running the tests
 
