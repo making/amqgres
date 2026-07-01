@@ -1,8 +1,8 @@
-image: ghcr.io/making/amqgres@sha256:0a5f47821a6c2be964aa78b74339efb19d445ecb4d36b3ba11a88de1b26d7827
-git_revision: c56337f86aa3856899d3b0e98a80952322668bfa
+image: ghcr.io/making/amqgres@sha256:56d1bf54a543f9e7e112771fb61d6e4142aa9a7d7ac849601fd990dde5ed5d62
+git_revision: 48497cca775e9a656a95f60cf1be7d507ee39ebf
 deployment:
   image:
     repository: ghcr.io/making/amqgres
-    digest: sha256:0a5f47821a6c2be964aa78b74339efb19d445ecb4d36b3ba11a88de1b26d7827
+    digest: sha256:56d1bf54a543f9e7e112771fb61d6e4142aa9a7d7ac849601fd990dde5ed5d62
   podLabels:
-    github.com/revision: c56337f86aa3856899d3b0e98a80952322668bfa
+    github.com/revision: 48497cca775e9a656a95f60cf1be7d507ee39ebf
