@@ -102,14 +102,17 @@ java -jar target/amqgres-0.0.1-SNAPSHOT.jar
 java -jar target/amqgres-0.0.1-SNAPSHOT.jar --spring.profiles.active=sqlite
 ```
 
-The `sqlite` profile defaults the datasource to a local `amqgres.db` file:
+The `sqlite` profile defaults the datasource to a local `/tmp/amqgres.db` file. To point it at
+another file, override just the path with `amqgres.sqlite.path`; the mandatory `journal_mode=WAL`
+and `busy_timeout` parameters are appended for you:
 
-```properties
-spring.datasource.url=jdbc:sqlite:amqgres.db?journal_mode=WAL&busy_timeout=5000
+```bash
+java -jar target/amqgres-0.0.1-SNAPSHOT.jar --spring.profiles.active=sqlite \
+  --amqgres.sqlite.path=/data/amqgres.db
 ```
 
 `journal_mode=WAL` and `busy_timeout` let the broker's connection pool share SQLite's single writer
-without `SQLITE_BUSY` errors. A `:memory:` URL is not usable, because each pooled connection would
+without `SQLITE_BUSY` errors. A `:memory:` path is not usable, because each pooled connection would
 open its own separate database.
 
 The SQLite backend wakes waiting consumers in process rather than through PostgreSQL
