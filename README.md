@@ -208,19 +208,25 @@ artemis producer \
   --message-count 3
 ```
 
-Receive them, waiting up to five seconds and stopping once the queue is drained:
+Receive them. `--verbose` prints each message body, and leaving `--message-count` at its
+default (1000) lets the consumer keep pulling every message that is on the queue instead of
+stopping after a fixed count; `--break-on-null` then stops it once a receive times out on an
+empty queue:
 
 ```shell
 artemis consumer \
   --protocol AMQP \
   --url amqp://localhost:5672 \
   --destination queue://demo \
-  --message-count 3 \
   --receive-timeout 5000 \
-  --break-on-null
+  --break-on-null \
+  --verbose
 ```
 
-The consumer acknowledges each message, so a second run returns nothing until new messages are sent.
+With `--verbose` each message is printed as it arrives, for example
+`Consumer demo, thread=0 Received Hello from Artemis CLI`. The consumer acknowledges every
+message it receives, so a second run returns nothing until new messages are sent. (The default
+caps a single run at 1000 messages; pass a larger `--message-count` to drain a bigger backlog.)
 Omitting `--amqgres.queue.names=demo` also works while `amqgres.queue.auto-create` is enabled
 (the default): the queue is created the first time the producer attaches.
 
