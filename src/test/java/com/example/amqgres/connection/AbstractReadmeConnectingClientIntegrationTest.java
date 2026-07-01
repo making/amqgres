@@ -2,7 +2,6 @@ package com.example.amqgres.connection;
 
 import java.time.Duration;
 
-import com.example.amqgres.TestcontainersConfiguration;
 import jakarta.jms.Connection;
 import jakarta.jms.JMSException;
 import jakarta.jms.Message;
@@ -17,7 +16,6 @@ import org.junit.jupiter.api.Test;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -25,7 +23,8 @@ import static org.awaitility.Awaitility.await;
 
 /**
  * Verifies that the README "Connecting a client" example, and the delivery semantics
- * documented directly beneath it, actually work end-to-end.
+ * documented directly beneath it, actually work end-to-end. Shared by both storage
+ * backends.
  *
  * <p>
  * The first test runs the README code block verbatim (differing only in the broker port,
@@ -47,16 +46,29 @@ import static org.awaitility.Awaitility.await;
  * store-level details of the redelivery count, dead-lettering and lock reclaim are
  * covered separately in {@code MessageStoreTest}; this class only asserts the behaviour a
  * JMS client observes.
+ *
+ * <p>
+ * Concrete subclasses only supply the backend wiring (PostgreSQL via Testcontainers, or
+ * the {@code sqlite} profile against a temporary file) and the dialect-specific
+ * expression that back-dates a delivery lock past its timeout.
  */
 @SpringBootTest(properties = "amqgres.listen.port=0")
-@Import(TestcontainersConfiguration.class)
-class ReadmeConnectingClientIntegrationTest {
+abstract class AbstractReadmeConnectingClientIntegrationTest {
 
 	@Autowired
 	private AmqpServerLifecycle server;
 
 	@Autowired
 	private JdbcClient jdbcClient;
+
+	/**
+	 * The backend's SQL expression for a {@code locked_at} timestamp aged past the lock
+	 * timeout, used to trigger the reclaim job without waiting for the real timeout
+	 * ({@code now() - interval '60 seconds'} on PostgreSQL,
+	 * {@code datetime('now', '-60 seconds')} on SQLite).
+	 * @return the dialect-specific back-dated {@code locked_at} expression
+	 */
+	protected abstract String backdatedLockedAt();
 
 	@BeforeEach
 	void reset() {
@@ -171,8 +183,8 @@ class ReadmeConnectingClientIntegrationTest {
 
 			// Age the delivery lock so the periodic reclaim job returns it to ready.
 			this.jdbcClient
-				.sql("UPDATE messages SET locked_at = now() - interval '60 seconds' "
-						+ "WHERE queue_name = :q AND state = 'locked'")
+				.sql("UPDATE messages SET locked_at = " + backdatedLockedAt()
+						+ " WHERE queue_name = :q AND state = 'locked'")
 				.param("q", "orders")
 				.update();
 

@@ -1,42 +1,32 @@
 package com.example.amqgres.connection;
 
-import java.nio.file.Path;
 import java.util.Optional;
 
 import com.example.amqgres.queue.QueueRepository;
 import org.apache.qpid.jms.JmsConnectionFactory;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jms.core.JmsClient;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * End-to-end tests for broker-side queue provisioning: startup creation from
  * {@code amqgres.queue.names} and on-attach creation from
- * {@code amqgres.queue.auto-create}. These run under the {@code sqlite} profile because
- * those options exist chiefly for single-instance SQLite deployments whose database file
- * cannot be reached from another host.
+ * {@code amqgres.queue.auto-create}. Shared by both storage backends.
+ *
+ * <p>
+ * These options exist chiefly for single-instance SQLite deployments whose database file
+ * cannot be reached from another host, but the provisioning logic itself is
+ * backend-independent, so the scenario is exercised against both backends. Concrete
+ * subclasses only supply the backend wiring (PostgreSQL via Testcontainers, or the
+ * {@code sqlite} profile against a temporary file).
  */
 @SpringBootTest(
 		properties = { "amqgres.listen.port=0", "amqgres.queue.auto-create=true", "amqgres.queue.names=preconfigured" })
-@ActiveProfiles("sqlite")
-class QueueProvisioningTest {
-
-	@TempDir
-	private static Path tempDir;
-
-	@DynamicPropertySource
-	static void datasource(DynamicPropertyRegistry registry) {
-		registry.add("spring.datasource.url", () -> "jdbc:sqlite:" + tempDir.resolve("amqgres.db").toAbsolutePath()
-				+ "?journal_mode=WAL&busy_timeout=5000");
-	}
+abstract class AbstractQueueProvisioningTest {
 
 	@Autowired
 	private AmqpServerLifecycle server;
