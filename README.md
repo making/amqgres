@@ -1,8 +1,9 @@
 # Amqgres
 
-Amqgres is a small AMQP 1.0 message broker that uses PostgreSQL as its message store. It provides
-point-to-point queues for AMQP 1.0 clients (Qpid JMS, AMQP.NET Lite, Rhea.js and others) without
-requiring any additional messaging middleware.
+Amqgres is a small AMQP 1.0 message broker that stores its messages in a SQL database. It runs on
+PostgreSQL by default and can also run on SQLite for local development or single-instance
+deployments. It provides point-to-point queues for AMQP 1.0 clients (Qpid JMS, AMQP.NET Lite,
+Rhea.js and others) without requiring any additional messaging middleware.
 
 ## When to use it
 
@@ -19,15 +20,16 @@ priority and scheduled delivery, and any management web interface.
 ## Requirements
 
 - Java 25
-- PostgreSQL 14 or later
+- PostgreSQL 14 or later, or SQLite (bundled through the JDBC driver, no server needed)
 
 ## Getting started
 
 ### 1. Prepare the database
 
-Point Amqgres at a PostgreSQL database. The tables and indexes are created automatically on startup
-(`schema.sql`). Queues must be registered before clients can attach to them; attaching to an
-unknown address is refused with `amqp:not-found`.
+Point Amqgres at a database. The tables and indexes are created automatically on startup
+(`schema-postgres.sql` or `schema-sqlite.sql`, selected by the storage backend). Queues must be
+registered before clients can attach to them; attaching to an unknown address is refused with
+`amqp:not-found`.
 
 Register a queue by inserting into the `queues` table:
 
@@ -60,6 +62,34 @@ amqgres.lock.reclaim-interval-seconds=5
 
 Any property can be overridden with environment variables, for example
 `SPRING_DATASOURCE_URL` or `AMQGRES_LISTEN_PORT`.
+
+### Choosing the storage backend
+
+The backend is selected by a Spring profile, either `postgres` (the default) or `sqlite`. Each
+profile sets `amqgres.storage.type` and a matching datasource in `application.properties`, so
+activating a profile is all that is normally needed:
+
+```shell
+# PostgreSQL (default)
+java -jar target/amqgres-0.0.1-SNAPSHOT.jar
+
+# SQLite
+java -jar target/amqgres-0.0.1-SNAPSHOT.jar --spring.profiles.active=sqlite
+```
+
+The `sqlite` profile defaults the datasource to a local `amqgres.db` file:
+
+```properties
+spring.datasource.url=jdbc:sqlite:amqgres.db?journal_mode=WAL&busy_timeout=5000
+```
+
+`journal_mode=WAL` and `busy_timeout` let the broker's connection pool share SQLite's single writer
+without `SQLITE_BUSY` errors. A `:memory:` URL is not usable, because each pooled connection would
+open its own separate database.
+
+The SQLite backend wakes waiting consumers in process rather than through PostgreSQL
+`LISTEN`/`NOTIFY`, so a SQLite database must be used by a single broker instance only. PostgreSQL
+remains the option for running several broker instances against one database.
 
 ### 3. Build and run
 
@@ -106,6 +136,20 @@ With a GraalVM JDK, build a native image with the `native` profile:
 ./mvnw -Pnative native:compile
 ./target/amqgres
 ```
+
+A single native image supports both backends; the backend is chosen at startup with the profile,
+exactly as on the JVM:
+
+```shell
+./mvnw -Pnative native:compile
+./target/amqgres --spring.profiles.active=sqlite
+./target/amqgres --spring.profiles.active=postgres
+```
+
+Both JDBC drivers are included, and the storage beans are picked by a factory that runs at startup
+rather than by build-time conditions, so no backend-specific build is needed. The bundled SQLite
+driver (`sqlite-jdbc`) ships GraalVM reachability metadata, so no manual native configuration is
+required either.
 
 ## Running the tests
 

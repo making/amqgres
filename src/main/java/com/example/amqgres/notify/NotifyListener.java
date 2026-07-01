@@ -5,6 +5,8 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
 
+import com.example.amqgres.AmqgresProperties;
+import com.example.amqgres.AmqgresProperties.Storage.Type;
 import com.example.amqgres.connection.LinkRegistry;
 import org.jspecify.annotations.Nullable;
 import org.postgresql.PGConnection;
@@ -24,6 +26,12 @@ import org.springframework.stereotype.Component;
  * The connection is created directly through {@link DriverManager} rather than borrowed
  * from the pool, because it blocks indefinitely waiting for notifications and must not
  * occupy a pooled connection.
+ *
+ * <p>
+ * This is the read side of the PostgreSQL wakeup path. The bean is always registered so a
+ * single (native) build supports both backends, but {@link #start()} is a no-op unless
+ * the PostgreSQL backend is active; the SQLite backend wakes links in process through
+ * {@link LocalQueueNotifier}.
  */
 @Component
 public class NotifyListener implements SmartLifecycle {
@@ -38,19 +46,27 @@ public class NotifyListener implements SmartLifecycle {
 
 	private final JdbcConnectionDetails connectionDetails;
 
+	private final AmqgresProperties properties;
+
 	private volatile boolean running;
 
 	private volatile @Nullable Thread worker;
 
 	private volatile @Nullable Connection connection;
 
-	public NotifyListener(LinkRegistry links, JdbcConnectionDetails connectionDetails) {
+	public NotifyListener(LinkRegistry links, JdbcConnectionDetails connectionDetails, AmqgresProperties properties) {
 		this.links = links;
 		this.connectionDetails = connectionDetails;
+		this.properties = properties;
 	}
 
 	@Override
 	public void start() {
+		if (this.properties.storage().type() != Type.POSTGRES) {
+			// Only PostgreSQL uses LISTEN/NOTIFY; the SQLite backend wakes links in
+			// process.
+			return;
+		}
 		this.running = true;
 		this.worker = Thread.ofVirtual().name("amqgres-notify").start(this::listen);
 	}

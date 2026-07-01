@@ -3,7 +3,7 @@ package com.example.amqgres.message;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
 
-import com.example.amqgres.config.AmqgresProperties;
+import com.example.amqgres.AmqgresProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

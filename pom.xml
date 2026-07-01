@@ -20,6 +20,7 @@
 	<properties>
 		<java.version>25</java.version>
 		<qpid-jms.version>2.7.0</qpid-jms.version>
+		<archunit.version>1.4.2</archunit.version>
 	</properties>
 
 	<dependencies>
@@ -34,6 +35,10 @@
 		<dependency>
 			<groupId>org.postgresql</groupId>
 			<artifactId>postgresql</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.xerial</groupId>
+			<artifactId>sqlite-jdbc</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>org.apache.qpid</groupId>
@@ -77,6 +82,12 @@
 			<groupId>org.apache.qpid</groupId>
 			<artifactId>qpid-jms-client</artifactId>
 			<version>${qpid-jms.version}</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>com.tngtech.archunit</groupId>
+			<artifactId>archunit-junit5</artifactId>
+			<version>${archunit.version}</version>
 			<scope>test</scope>
 		</dependency>
 	</dependencies>

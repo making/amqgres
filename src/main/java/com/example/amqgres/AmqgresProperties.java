@@ -1,4 +1,4 @@
-package com.example.amqgres.config;
+package com.example.amqgres;
 
 import org.jspecify.annotations.Nullable;
 
@@ -13,8 +13,37 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * {@code spring.datasource.*} properties and is intentionally not represented here.
  */
 @ConfigurationProperties(prefix = "amqgres")
-public record AmqgresProperties(@DefaultValue Listen listen, @DefaultValue Link link,
+public record AmqgresProperties(@DefaultValue Storage storage, @DefaultValue Listen listen, @DefaultValue Link link,
 		@DefaultValue Redelivery redelivery, @DefaultValue Lock lock, @DefaultValue Tls tls, @DefaultValue Sasl sasl) {
+
+	/**
+	 * Selects which storage backend persists queues and messages. Factory beans switch on
+	 * {@code type} at startup to build the matching store, repository and notifier.
+	 */
+	public record Storage(@DefaultValue("postgres") Type type) {
+
+		/**
+		 * Supported storage backends.
+		 */
+		public enum Type {
+
+			/**
+			 * PostgreSQL, using {@code LISTEN}/{@code NOTIFY} for consumer wakeups. The
+			 * default and the only backend suitable for running several broker instances
+			 * against one database.
+			 */
+			POSTGRES,
+
+			/**
+			 * SQLite, a single-file store for local development and single-instance
+			 * deployments. Consumer wakeups are delivered in-process, so a SQLite
+			 * database must not be shared between broker instances.
+			 */
+			SQLITE
+
+		}
+
+	}
 
 	/**
 	 * Network endpoint the AMQP acceptor binds to.

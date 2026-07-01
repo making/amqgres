@@ -47,6 +47,55 @@ exactly, including type information (a `message-id` may be a ulong, uuid, binary
 would be lost and guessed at if the message were reassembled from JSON. The JSONB columns are a
 denormalised, best-effort copy; decoding failures never block persistence.
 
+## Storage backends
+
+`amqgres.storage.type` (`postgres` by default, or `sqlite`) selects the store. `MessageStore`,
+`QueueRepository` and `QueueNotifier` are interfaces with one implementation per backend. The active
+implementation is chosen by a `@Bean` factory method (one per interface, in `config`'s
+`StorageConfiguration`) that switches on `amqgres.storage.type`. `AmqpServices` and the rest of the
+connection layer depend only on the interfaces and never learn which backend is running.
+
+The selection is deliberately a factory method rather than `@ConditionalOnProperty` on each
+implementation. Bean conditions are evaluated at build time during native-image AOT, which would tie
+a native image to one backend; a factory method body runs at startup instead, so a single build (JVM
+or native) carries both backends and picks one at runtime. `NotifyListener` is likewise always
+registered but its `start()` is a no-op unless the backend is PostgreSQL. Both JDBC drivers are
+therefore always on the classpath.
+
+There are two Spring profiles, `postgres` (the default via `spring.profiles.default` in
+`application.properties`) and `sqlite`, each with its own `application-${profile}.properties`. Each
+profile file sets `amqgres.storage.type` together with its datasource, so a backend is normally
+selected by activating a profile rather than setting individual properties. The property, not the
+profile name, is what the factory methods and the schema selection key off, so tests that only need
+the store can set `amqgres.storage.type` (or activate the profile) directly.
+
+The wakeup notification is a separate port, `QueueNotifier`, for the same reason: the store calls it
+after an insert but does not know how the signal reaches waiting links. PostgreSQL fans it out
+through `NOTIFY`; SQLite wakes links in the current process (see below).
+
+SQLite exists because the project's convention is to back demos and single-instance deployments with
+SQLite rather than an in-memory fake. It accepts real constraints in exchange for needing no server:
+
+- No `FOR UPDATE SKIP LOCKED`. SQLite serialises writers with a single database-level write lock, so
+  `SqliteMessageStore` locks with a plain `UPDATE ... WHERE id IN (SELECT ... LIMIT)`; two concurrent
+  consumers still get disjoint rows because their updates cannot interleave. `RETURNING` does not
+  promise row order, so the locked batch is re-sorted by id in Java to keep delivery FIFO.
+- No `LISTEN`/`NOTIFY`, so wakeups are in process only and a SQLite file must not be shared between
+  broker instances. PostgreSQL remains the choice for running several instances against one database.
+- SQL dialect differences (`now()` vs `datetime('now')`, `make_interval` vs a `datetime` modifier,
+  `EXISTS` returning a boolean vs an integer, no `jsonb`) are confined to the two implementations.
+
+The schema is applied by Spring's SQL init, which picks `schema-${platform}.sql`. `spring.sql.init.platform`
+is set to `${amqgres.storage.type}` in `application.properties`, so `schema-postgres.sql` or
+`schema-sqlite.sql` runs to match the active backend. There is deliberately no plain `schema.sql`,
+because the default fallback would always run it regardless of platform.
+
+Because the backend is chosen by a factory method (see above) rather than a build-time condition, one
+native image supports both backends and is switched at startup with the profile, the same as on the
+JVM. This was verified by building a single native image and booting it under each profile
+(SQLite against a file, PostgreSQL against a container) end-to-end; the JVM test suite does not cover
+the native binary.
+
 ## Delivery, acknowledgement and redelivery
 
 - A confirmed (accepted) message is represented by deleting its row, so the table only holds
@@ -57,12 +106,15 @@ denormalised, best-effort copy; decoding failures never block persistence.
   disconnects therefore need no special handling: the reclaim job returns stale `locked` rows to
   `ready`.
 
-## LISTEN/NOTIFY wakeup path
+## LISTEN/NOTIFY wakeup path (PostgreSQL)
 
 When a consumer holds credit but the queue is empty, its sender link is registered as waiting in a
-shared registry keyed by queue name. New messages issue `NOTIFY amqgres_queue` with the queue name
-as payload. A single listener thread wakes the waiting links, which re-run delivery on their own
-connection threads.
+shared registry keyed by queue name. This registry is backend-independent; only how a link is woken
+differs. On PostgreSQL, new messages issue `NOTIFY amqgres_queue` (via `PostgresQueueNotifier`) with
+the queue name as payload, and a single listener thread wakes the waiting links, which re-run
+delivery on their own connection threads. On SQLite, `LocalQueueNotifier` wakes the registered links
+directly in process; waking only posts a task to each link's connection thread, so it never touches
+another connection's engine off-thread.
 
 The listener uses a dedicated connection created through `DriverManager` rather than one borrowed
 from HikariCP. A pooled connection blocked indefinitely in `getNotifications` would permanently
@@ -82,13 +134,21 @@ update paths are native-safe, so no `SqlRowSet` is used anywhere in the broker.
 Packages are organised by feature, not by technical layer:
 
 - `connection` — acceptor, per-connection loop, event dispatch, link registry.
-- `queue` — queue existence checks.
-- `message` — persistence, delivery locking, redelivery, lock reclaim, wire codec.
-- `notify` — the LISTEN/NOTIFY listener.
-- `config` — configuration properties and infrastructure beans.
+- `queue` — queue registry (`QueueRepository` and its per-backend implementations).
+- `message` — persistence, delivery locking, redelivery, lock reclaim, wire codec, and the
+  `QueueNotifier` port. `MessageStore` and `QueueNotifier` are interfaces implemented per backend.
+- `notify` — the wakeup adapters: the PostgreSQL `LISTEN` listener plus both `QueueNotifier`
+  implementations (`PostgresQueueNotifier`, `LocalQueueNotifier`).
+- `config` — the composition root: infrastructure beans (`AmqgresConfig`) and
+  `StorageConfiguration`, which wires the per-backend storage beans.
 
-`notify` depends on `connection` (to wake links); `connection` depends on `queue` and `message`.
-There are no cycles between packages.
+`config` is the composition root and may depend on the feature packages (`StorageConfiguration`
+constructs their implementations), but nothing may depend on `config`. `AmqgresProperties` therefore
+lives in the top-level package (`com.example.amqgres`), not in `config`, so that the feature packages
+can read configuration without depending on the composition root. Among the feature slices, `notify`
+depends on `connection` (to wake links) and on `message` (it implements `QueueNotifier`), and
+`connection` depends on `queue` and `message`; there are no cycles. Both properties — no slice cycles
+and no dependencies on `config` from outside it — are enforced by `PackageArchitectureTest` (ArchUnit).
 
 ## Working on the code
 

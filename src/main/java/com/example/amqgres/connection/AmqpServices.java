@@ -1,6 +1,6 @@
 package com.example.amqgres.connection;
 
-import com.example.amqgres.config.AmqgresProperties;
+import com.example.amqgres.AmqgresProperties;
 import com.example.amqgres.message.MessageCodec;
 import com.example.amqgres.message.MessageStore;
 import com.example.amqgres.queue.QueueRepository;
