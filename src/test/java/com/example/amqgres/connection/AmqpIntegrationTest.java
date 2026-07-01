@@ -31,7 +31,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * {@link JmsClient}; the redelivery case drops to the raw JMS API because it needs to
  * receive without acknowledging, which {@code JmsClient} does not expose.
  */
-@SpringBootTest(properties = "amqgres.listen.port=0")
+@SpringBootTest(properties = { "amqgres.listen.port=0", "amqgres.queue.auto-create=false" })
 @Import(TestcontainersConfiguration.class)
 class AmqpIntegrationTest {
 

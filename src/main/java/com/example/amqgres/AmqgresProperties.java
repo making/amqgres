@@ -66,13 +66,13 @@ public record AmqgresProperties(@DefaultValue Storage storage, @DefaultValue Lis
 	 * where the database file is local to the broker) these options let queues be
 	 * provisioned through the broker itself.
 	 *
-	 * @param autoCreate when {@code true}, attaching to an unknown address creates the
-	 * queue instead of rejecting the attach with {@code amqp:not-found}; disabled by
-	 * default so an unregistered address is refused
+	 * @param autoCreate when {@code true} (the default), attaching to an unknown address
+	 * creates the queue instead of rejecting the attach with {@code amqp:not-found}; set
+	 * to {@code false} to only allow attaches to pre-registered queues
 	 * @param names queue names created at startup if they do not already exist; applies
 	 * to every backend
 	 */
-	public record Queue(@DefaultValue("false") boolean autoCreate, @DefaultValue List<String> names) {
+	public record Queue(@DefaultValue("true") boolean autoCreate, @DefaultValue List<String> names) {
 	}
 
 	/**

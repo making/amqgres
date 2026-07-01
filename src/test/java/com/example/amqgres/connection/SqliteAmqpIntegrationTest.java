@@ -25,7 +25,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * consumer wakeup ({@code LocalQueueNotifier}), which replaces PostgreSQL
  * {@code LISTEN}/{@code NOTIFY}.
  */
-@SpringBootTest(properties = "amqgres.listen.port=0")
+@SpringBootTest(properties = { "amqgres.listen.port=0", "amqgres.queue.auto-create=false" })
 @ActiveProfiles("sqlite")
 class SqliteAmqpIntegrationTest {
 

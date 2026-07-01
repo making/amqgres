@@ -98,21 +98,23 @@ the native binary.
 
 ## Queue provisioning
 
-Queues are pre-registered by default and an attach to an unknown address is refused with
-`amqp:not-found`; the broker never declares queues from the AMQP wire itself, because AMQP 1.0 has
-no queue-declaration in its core and the `dynamic` terminus flag is not honoured. Two opt-in paths
-exist because a SQLite database is a local file that cannot be reached from another host, so the
-PostgreSQL "just run an INSERT from anywhere" workflow has no SQLite equivalent:
+A client can only attach to a queue that exists; the broker never declares queues from the AMQP
+wire itself, because AMQP 1.0 has no queue-declaration in its core and the `dynamic` terminus flag
+is not honoured. Queues are instead created one of two ways, and the SQLite backend is why the first
+one exists at all: a SQLite database is a local file that cannot be reached from another host, so the
+PostgreSQL "just run an INSERT from anywhere" workflow has no SQLite equivalent.
 
+- `amqgres.queue.auto-create` makes `EventDispatcher` create the queue on attach. It defaults to
+  `true`, so the out-of-the-box behaviour is that clients create queues by attaching; setting it to
+  `false` restores "reject unknown addresses with `amqp:not-found`". This is the Artemis-style
+  auto-create policy, not an AMQP protocol feature.
 - `amqgres.queue.names` seeds queues at startup. It is wired as an `ApplicationRunner` in
   `AmqgresConfig` (the composition root) rather than inside a store, so it runs after Spring's SQL
   init has created the schema and stays backend-independent.
-- `amqgres.queue.auto-create` makes `EventDispatcher` create the queue on attach instead of
-  refusing it. It is off by default so the safe behaviour remains "reject unknown addresses"; it is
-  the Artemis-style auto-create policy, not an AMQP protocol feature.
 
-Both are backend-independent (they only call `QueueRepository.create`, which is idempotent) but are
-motivated by SQLite; PostgreSQL deployments normally keep them off and register queues out of band.
+Both only call `QueueRepository.create` (idempotent) and work on either backend. Tests that assert
+the refusal path pin `amqgres.queue.auto-create=false`, since the default would otherwise create the
+"unknown" queue instead of rejecting it.
 
 ## Delivery, acknowledgement and redelivery
 
