@@ -19,12 +19,11 @@ any additional messaging middleware.
   - [Creating queues](#creating-queues)
   - [TLS](#tls)
   - [Authentication (SASL)](#authentication-sasl)
+- [Delivery semantics](#delivery-semantics)
 - [Connecting clients](#connecting-clients)
   - [Qpid JMS](#qpid-jms)
-  - [Delivery semantics](#delivery-semantics)
-  - [Publish/subscribe with topics](#publishsubscribe-with-topics)
-  - [Generic AMQP 1.0 clients and addressing](#generic-amqp-10-clients-and-addressing)
-  - [Sending and receiving from the command line](#sending-and-receiving-from-the-command-line)
+  - [Generic AMQP 1.0 clients](#generic-amqp-10-clients)
+  - [Command line (Artemis CLI)](#command-line-artemis-cli)
 - [Running the tests](#running-the-tests)
 
 ## When to use it
@@ -58,9 +57,8 @@ docker run --rm -p 5672:5672 ghcr.io/making/amqgres:native \
 The broker now accepts AMQP 1.0 connections on `localhost:5672`. No queue has to be declared
 beforehand: `amqgres.queue.auto-create` is enabled by default, so a queue is created the first
 time a client attaches to its address. Any AMQP 1.0 client can talk to it: see [Connecting clients](#connecting-clients) for JMS and Spring
-AMQP code, or [Sending and receiving from the command line](#sending-and-receiving-from-the-command-line)
-to exchange messages without writing any code. To run against PostgreSQL or to build the broker
-yourself, read on.
+AMQP code, or the [command line](#command-line-artemis-cli) to exchange messages without writing
+any code. To run against PostgreSQL or to build the broker yourself, read on.
 
 ## Running the broker
 
@@ -231,7 +229,7 @@ INSERT INTO queues(name) VALUES ('orders');
 
 Topics, by contrast, need no pre-registration: they are not rows in the `queues` table, and
 `amqgres.topic.auto-create` (default `true`) allows attaching to any topic address. See
-[Publish/subscribe with topics](#publishsubscribe-with-topics).
+[Publish/subscribe to a topic](#publishsubscribe-to-a-topic).
 
 ### TLS
 
@@ -303,6 +301,16 @@ A wrong username or password is refused during the SASL exchange with the `auth`
 connect at all because `ANONYMOUS` is not offered. PLAIN transmits the password in the clear, so
 combine it with [TLS](#tls) in production.
 
+## Delivery semantics
+
+Whichever client library is used, delivery follows the same at-least-once model:
+
+- A received message is locked, not removed. Acknowledging it (`accepted`) deletes it.
+- Releasing or rejecting a message returns it for redelivery until `redelivery.max-count` is
+  reached, after which it is dead-lettered or deleted.
+- If a consumer disconnects without acknowledging, the message lock expires after
+  `lock.timeout-seconds` and the message becomes deliverable again.
+
 ## Connecting clients
 
 Amqgres speaks plain AMQP 1.0 over TCP, so any AMQP 1.0 client library works. The sections below
@@ -310,6 +318,8 @@ show the same broker used from Qpid JMS, from a generic AMQP 1.0 client (Spring 
 `spring-amqp-client`), and from the command line.
 
 ### Qpid JMS
+
+#### Send and receive on a queue
 
 ```java
 JmsConnectionFactory factory = new JmsConnectionFactory("amqp://localhost:5672");
@@ -337,15 +347,7 @@ provisioned up front is refused with `amqp:not-found`. AMQP 1.0 itself has no qu
 this is a broker-side policy, not a protocol or JMS feature. See
 [Creating queues](#creating-queues) for the provisioning options.
 
-### Delivery semantics
-
-- A received message is locked, not removed. Acknowledging it (`accepted`) deletes it.
-- Releasing or rejecting a message returns it for redelivery until `redelivery.max-count` is
-  reached, after which it is dead-lettered or deleted.
-- If a consumer disconnects without acknowledging, the message lock expires after
-  `lock.timeout-seconds` and the message becomes deliverable again.
-
-### Publish/subscribe with topics
+#### Publish/subscribe to a topic
 
 A topic delivers a copy of every published message to each subscription, rather than sharing
 messages between competing consumers as a queue does. Use `session.createTopic(...)` and the broker
@@ -383,12 +385,16 @@ the message.
 to restrict topics to those listed in `amqgres.topic.names`. Message selectors and shared
 subscriptions are not supported.
 
-### Generic AMQP 1.0 clients and addressing
+### Generic AMQP 1.0 clients
 
 The JMS examples above rely on the Qpid JMS client telling the broker whether an address is a queue
 or a topic (a `topic` capability on the AMQP terminus). A generic AMQP 1.0 client — such as Spring
 AMQP's `spring-amqp-client` — sends no such capability, so the broker classifies the address
-itself, checking these rules in order:
+itself.
+
+#### Addressing
+
+The broker checks these rules in order:
 
 | Address | Resolved as |
 |---|---|
@@ -410,7 +416,9 @@ address-less sender and routes each message by its `to` property (as `spring-amq
 works too. A message whose `to` cannot be resolved is rejected with `amqp:not-found` without
 affecting the link.
 
-For example, with Spring AMQP 4.1's `spring-amqp-client`. The client is asynchronous: every
+#### Send and receive on a queue
+
+The examples below use Spring AMQP 4.1's `spring-amqp-client`. The client is asynchronous: every
 operation returns a `CompletableFuture`, meant to be composed with `thenAccept`/`thenCompose`
 rather than blocked on with `get()`:
 
@@ -433,8 +441,13 @@ CompletableFuture<String> received = client.from("orders")
         .timeout(Duration.ofSeconds(5))
         .<String>receiveAndConvert();
 received.thenAccept(body -> System.out.println("Received: " + body));
+```
 
-// Publish/subscribe: the /topics/ prefix makes the address a topic.
+#### Publish/subscribe to a topic
+
+Publishing uses the same `client` as above; the `/topics/` prefix makes the address a topic:
+
+```java
 CompletableFuture<Boolean> published = client.to("/topics/news").body("breaking").send();
 ```
 
@@ -449,7 +462,7 @@ void onNews(String body) {
 }
 ```
 
-### Sending and receiving from the command line
+### Command line (Artemis CLI)
 
 Because Amqgres speaks plain AMQP 1.0, any AMQP 1.0 client works as a quick smoke test. The
 [Apache ActiveMQ Artemis](https://activemq.apache.org/components/artemis/) CLI is convenient because
