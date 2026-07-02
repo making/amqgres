@@ -1,6 +1,7 @@
 package com.example.amqgres.message;
 
 import java.util.List;
+import java.util.Objects;
 
 import org.jspecify.annotations.Nullable;
 
@@ -58,6 +59,28 @@ public class PostgresMessageStore implements MessageStore {
 			.single();
 		this.notifier.notifyQueue(queueName);
 		return id;
+	}
+
+	@Override
+	public List<String> fanOut(String topicName, byte[] body, @Nullable String propertiesJson,
+			@Nullable String applicationPropertiesJson) {
+		List<String> queueNames = this.jdbcClient.sql("""
+				INSERT INTO messages(queue_name, body, properties, application_properties)
+				SELECT queue_name, :body, CAST(:properties AS jsonb), CAST(:applicationProperties AS jsonb)
+				FROM subscriptions
+				WHERE topic_name = :topic
+				RETURNING queue_name
+				""")
+			.param("topic", topicName)
+			.param("body", body)
+			.param("properties", propertiesJson)
+			.param("applicationProperties", applicationPropertiesJson)
+			.query((rs, rowNum) -> Objects.requireNonNull(rs.getString("queue_name")))
+			.list();
+		for (String queueName : queueNames) {
+			this.notifier.notifyQueue(queueName);
+		}
+		return queueNames;
 	}
 
 	@Override

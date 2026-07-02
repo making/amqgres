@@ -44,8 +44,8 @@ import static org.awaitility.Awaitility.await;
  * {@code orders}, so these tests rely on the default
  * {@code amqgres.queue.auto-create=true} to confirm the example works out of the box. The
  * store-level details of the redelivery count, dead-lettering and lock reclaim are
- * covered separately in {@code MessageStoreTest}; this class only asserts the behaviour a
- * JMS client observes.
+ * covered separately in {@code AbstractMessageStoreTest}; this class only asserts the
+ * behaviour a JMS client observes.
  *
  * <p>
  * Concrete subclasses only supply the backend wiring (PostgreSQL via Testcontainers, or
@@ -168,7 +168,8 @@ abstract class AbstractReadmeConnectingClientIntegrationTest {
 		// "If a consumer disconnects without acknowledging, the message lock expires
 		// after lock.timeout-seconds and the message becomes deliverable again." The
 		// live ReclaimJob is exercised here; the lock is aged past the timeout by
-		// back-dating locked_at, the same way MessageStoreTest ages a lock, so the test
+		// back-dating locked_at, the same way AbstractMessageStoreTest ages a lock, so
+		// the test
 		// does not have to wait for the real 30s timeout.
 		try (Connection first = connectionFactory().createConnection()) {
 			first.start();

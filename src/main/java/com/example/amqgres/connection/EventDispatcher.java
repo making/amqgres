@@ -325,19 +325,16 @@ public class EventDispatcher {
 	}
 
 	/**
-	 * Copies a message into every subscription queue bound to a topic. Each copy reuses
-	 * the ordinary {@link com.example.amqgres.message.MessageStore#insert} path, which
-	 * also notifies that queue's waiting consumers. With no subscriptions the message is
-	 * simply dropped, matching standard topic semantics.
+	 * Copies a message into every subscription queue bound to a topic through
+	 * {@link com.example.amqgres.message.MessageStore#fanOut}, a single set-based insert
+	 * that also notifies each queue's waiting consumers. With no subscriptions the
+	 * message is simply dropped, matching standard topic semantics.
 	 * @param topic the topic being published to
 	 * @param decoded the decoded inbound message
 	 */
 	private void fanOut(String topic, DecodedMessage decoded) {
-		List<String> targets = this.services.subscriptions().queuesForTopic(topic);
-		for (String queueName : targets) {
-			this.services.messages()
-				.insert(queueName, decoded.raw(), decoded.propertiesJson(), decoded.applicationPropertiesJson());
-		}
+		List<String> targets = this.services.messages()
+			.fanOut(topic, decoded.raw(), decoded.propertiesJson(), decoded.applicationPropertiesJson());
 		log.debug("Fanned out message on topic '{}' to {} subscription(s)", topic, targets.size());
 	}
 

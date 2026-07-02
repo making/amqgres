@@ -1,7 +1,5 @@
 package com.example.amqgres.queue;
 
-import java.util.List;
-
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -23,13 +21,6 @@ public interface SubscriptionRepository {
 	 * @param durable whether the subscription persists while its consumer is offline
 	 */
 	void bind(String topicName, String queueName, boolean durable);
-
-	/**
-	 * Returns the backing queues of every subscription bound to a topic.
-	 * @param topicName the topic
-	 * @return the subscription queue names, in no particular order
-	 */
-	List<String> queuesForTopic(String topicName);
 
 	/**
 	 * Removes a subscription binding.

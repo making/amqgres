@@ -1,8 +1,5 @@
 package com.example.amqgres.queue;
 
-import java.util.List;
-import java.util.Objects;
-
 import org.jspecify.annotations.Nullable;
 
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -29,14 +26,6 @@ public class PostgresSubscriptionRepository implements SubscriptionRepository {
 				VALUES (:queue, :topic, :durable)
 				ON CONFLICT (queue_name) DO NOTHING
 				""").param("queue", queueName).param("topic", topicName).param("durable", durable).update();
-	}
-
-	@Override
-	public List<String> queuesForTopic(String topicName) {
-		return this.jdbcClient.sql("SELECT queue_name FROM subscriptions WHERE topic_name = :topic")
-			.param("topic", topicName)
-			.query((rs, rowNum) -> Objects.requireNonNull(rs.getString("queue_name")))
-			.list();
 	}
 
 	@Override

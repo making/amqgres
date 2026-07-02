@@ -29,6 +29,21 @@ public interface MessageStore {
 			@Nullable String applicationPropertiesJson);
 
 	/**
+	 * Inserts a copy of a message into every subscription queue bound to a topic with a
+	 * single set-based statement, and notifies consumers waiting on each affected queue.
+	 * With no subscriptions nothing is inserted, matching standard topic semantics.
+	 * @param topicName the topic being published to
+	 * @param body the full encoded AMQP message
+	 * @param propertiesJson the decoded {@code properties} section as JSON, or
+	 * {@code null}
+	 * @param applicationPropertiesJson the decoded {@code application-properties} as
+	 * JSON, or {@code null}
+	 * @return the subscription queue names a copy was inserted into
+	 */
+	List<String> fanOut(String topicName, byte[] body, @Nullable String propertiesJson,
+			@Nullable String applicationPropertiesJson);
+
+	/**
 	 * Atomically locks up to {@code limit} ready messages for delivery.
 	 * @param queueName the source queue
 	 * @param limit the maximum number of messages to lock (the remaining link credit)
