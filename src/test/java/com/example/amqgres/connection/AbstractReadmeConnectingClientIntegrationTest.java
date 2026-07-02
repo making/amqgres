@@ -73,6 +73,9 @@ abstract class AbstractReadmeConnectingClientIntegrationTest {
 	@BeforeEach
 	void reset() {
 		this.jdbcClient.sql("DELETE FROM messages").update();
+		// Another test class sharing this Spring context (and so this database) may
+		// have left subscription rows behind, which reference queues.
+		this.jdbcClient.sql("DELETE FROM subscriptions").update();
 		this.jdbcClient.sql("DELETE FROM queues").update();
 	}
 
