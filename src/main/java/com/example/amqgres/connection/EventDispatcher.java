@@ -18,6 +18,7 @@ import org.apache.qpid.protonj2.engine.Sender;
 import org.apache.qpid.protonj2.engine.Session;
 import org.apache.qpid.protonj2.types.Symbol;
 import org.apache.qpid.protonj2.types.messaging.Accepted;
+import org.apache.qpid.protonj2.types.messaging.Rejected;
 import org.apache.qpid.protonj2.types.messaging.Source;
 import org.apache.qpid.protonj2.types.messaging.Target;
 import org.apache.qpid.protonj2.types.messaging.TerminusDurability;
@@ -72,8 +73,11 @@ public class EventDispatcher {
 		connection.receiverOpenHandler(this::onReceiverOpen);
 	}
 
+	private static final Symbol ANONYMOUS_RELAY = Symbol.valueOf("ANONYMOUS-RELAY");
+
 	private void onConnectionOpen(Connection connection) {
 		connection.setContainerId("amqgres");
+		connection.setOfferedCapabilities(ANONYMOUS_RELAY);
 		connection.open();
 	}
 
@@ -89,6 +93,14 @@ public class EventDispatcher {
 
 	private void onReceiverOpen(Receiver receiver) {
 		// The remote is a producer: our local end is a receiver.
+		// A target with no address is the protocol-level anonymous relay (used by
+		// clients such as spring-amqp-client): the destination travels per message in
+		// the properties 'to' field, so there is nothing for the terminus resolver to
+		// interpret at attach time.
+		if (receiver.getRemoteTarget() instanceof Target target && target.getAddress() == null) {
+			installReceiver(receiver, LinkState.forAnonymousRelay());
+			return;
+		}
 		TerminusResolver.ProducerAttach attach = this.services.terminusResolver().resolveProducer(receiver);
 		if (attach == null) {
 			refuse(receiver, null);
@@ -249,16 +261,67 @@ public class EventDispatcher {
 		byte[] buffer = new byte[size];
 		delivery.readBytes(buffer, 0, size);
 		DecodedMessage decoded = this.services.codec().decode(buffer, 0, size);
-		if (state.topicPublish != null) {
-			fanOut(state.topicPublish, decoded);
+		if (state.anonymousRelay) {
+			routeAnonymous(delivery, decoded);
 		}
 		else {
+			if (state.topicPublish != null) {
+				fanOut(state.topicPublish, decoded);
+			}
+			else {
+				long id = this.services.messages()
+					.insert(state.queueName, decoded.raw(), decoded.propertiesJson(),
+							decoded.applicationPropertiesJson());
+				log.debug("Stored message {} on queue '{}'", id, state.queueName);
+			}
+			delivery.disposition(Accepted.getInstance(), true);
+		}
+		receiver.addCredit(1);
+	}
+
+	/**
+	 * Routes a delivery arriving on an anonymous-relay link by the message's {@code to}
+	 * property, classified through the same
+	 * {@link TerminusResolver#resolveAddress(String) address rules} as a capability-less
+	 * attach ({@code /topics/<name>}, {@code /queues/<name>},
+	 * {@code amqgres.topic.names}, else a queue), with the same auto-create policies. A
+	 * missing {@code to} or an unknown destination rejects just this delivery with
+	 * {@code amqp:not-found}, leaving the link open, like an attach to the same address
+	 * would have been refused.
+	 * @param delivery the inbound delivery
+	 * @param decoded the decoded inbound message
+	 */
+	private void routeAnonymous(IncomingDelivery delivery, DecodedMessage decoded) {
+		String to = decoded.to();
+		if (to == null) {
+			rejectDelivery(delivery, null);
+			return;
+		}
+		TerminusResolver.Address address = this.services.terminusResolver().resolveAddress(to);
+		if (address.topic()) {
+			if (!resolveTopic(address.name())) {
+				rejectDelivery(delivery, to);
+				return;
+			}
+			fanOut(address.name(), decoded);
+		}
+		else {
+			if (!resolveQueue(address.name())) {
+				rejectDelivery(delivery, to);
+				return;
+			}
 			long id = this.services.messages()
-				.insert(state.queueName, decoded.raw(), decoded.propertiesJson(), decoded.applicationPropertiesJson());
-			log.debug("Stored message {} on queue '{}'", id, state.queueName);
+				.insert(address.name(), decoded.raw(), decoded.propertiesJson(), decoded.applicationPropertiesJson());
+			log.debug("Stored message {} on queue '{}' via anonymous relay", id, address.name());
 		}
 		delivery.disposition(Accepted.getInstance(), true);
-		receiver.addCredit(1);
+	}
+
+	private void rejectDelivery(IncomingDelivery delivery, @Nullable String to) {
+		Rejected rejected = new Rejected()
+			.setError(new ErrorCondition(AmqpError.NOT_FOUND, "destination not found: " + to));
+		delivery.disposition(rejected, true);
+		log.info("Rejected anonymous-relay delivery to unknown destination '{}'", to);
 	}
 
 	/**
@@ -421,6 +484,9 @@ public class EventDispatcher {
 	 * topic producer, {@code topicPublish} names the topic to fan out to (and
 	 * {@code queueName} is unused). For a topic consumer, {@code subscription} carries
 	 * the teardown information and {@code queueName} is the subscription's backing queue.
+	 * For an anonymous-relay producer, {@code anonymousRelay} is set and the destination
+	 * is resolved per delivery from the message's {@code to} property ({@code queueName}
+	 * is unused).
 	 */
 	private static final class LinkState {
 
@@ -430,25 +496,32 @@ public class EventDispatcher {
 
 		private final TerminusResolver.@Nullable Subscription subscription;
 
+		private final boolean anonymousRelay;
+
 		private @Nullable PendingLink pending;
 
 		private LinkState(String queueName, @Nullable String topicPublish,
-				TerminusResolver.@Nullable Subscription subscription) {
+				TerminusResolver.@Nullable Subscription subscription, boolean anonymousRelay) {
 			this.queueName = queueName;
 			this.topicPublish = topicPublish;
 			this.subscription = subscription;
+			this.anonymousRelay = anonymousRelay;
 		}
 
 		static LinkState forQueue(String queueName) {
-			return new LinkState(queueName, null, null);
+			return new LinkState(queueName, null, null, false);
 		}
 
 		static LinkState forTopicProducer(String topic) {
-			return new LinkState(topic, topic, null);
+			return new LinkState(topic, topic, null, false);
 		}
 
 		static LinkState forTopicConsumer(TerminusResolver.Subscription subscription) {
-			return new LinkState(subscription.queueName(), null, subscription);
+			return new LinkState(subscription.queueName(), null, subscription, false);
+		}
+
+		static LinkState forAnonymousRelay() {
+			return new LinkState("", null, null, true);
 		}
 
 	}

@@ -122,6 +122,20 @@ created two ways — both call the idempotent `QueueRepository.create` and work 
 
 Tests asserting the refusal path pin `amqgres.queue.auto-create=false`.
 
+## Anonymous relay (generic AMQP 1.0 clients)
+
+The broker advertises the `ANONYMOUS-RELAY` connection capability and accepts a producer attach
+whose target has no address; each delivery on such a link is routed by the message's `to` property
+instead (`EventDispatcher.routeAnonymous`). This exists because some generic AMQP 1.0 clients send
+exclusively this way — Spring AMQP's `spring-amqp-client` (`AmqpClient`) opens a single anonymous
+sender and refuses to send at all if the capability is missing. The check is protocol-level, so it
+lives in `EventDispatcher`, not behind `TerminusResolver` (there is no terminus address to
+interpret). Classifying the `to` address, however, is delegated to
+`TerminusResolver.resolveAddress` — the same rules as a capability-less attach (see
+publish/subscribe below) — so an address means the same thing per message as at attach, with the
+same auto-create policies. A missing `to` or unknown destination rejects just that delivery with
+`amqp:not-found`, leaving the link open.
+
 ## Delivery, acknowledgement and redelivery
 
 - A confirmed (accepted) message is represented by deleting its row, so the table holds only `ready`
@@ -142,11 +156,16 @@ subscription — no second delivery mechanism.
   (one impl per backend, chosen by the same `StorageConfiguration` factory) reads them for fan-out
   and writes them on attach. The subscription queue is a real row in `queues`, so fan-out `insert`
   and its `notifyQueue` are reused unchanged; with no subscriptions a publish is simply dropped.
-- Queue vs topic is decided by the terminus, not the address: `TerminusResolver` (interface, with the
-  capability-based `JmsTerminusResolver`) turns a `Source`/`Target` into either a queue name or a
-  `Subscription`. This is a deliberate seam — a generic AMQP 1.0 client (e.g. Spring AMQP, which
-  sends no `topic` capability) can be supported later by an address-driven resolver without touching
-  `EventDispatcher`. `amqgres.topic.names` exists as the address-based hook.
+- Queue vs topic is decided by the terminus: `TerminusResolver` (interface, implemented by
+  `DefaultTerminusResolver`) turns a `Source`/`Target` into either a queue name or a
+  `Subscription`. For a generic AMQP 1.0 client (e.g. Spring AMQP's `spring-amqp-client`), which
+  sends no capabilities, the resolver falls back to address-based classification
+  (`TerminusResolver.resolveAddress`): `/topics/<name>` is a topic and `/queues/<name>` a queue
+  (prefix stripped, enabling dynamic topics for generic clients); a bare address listed in
+  `amqgres.topic.names` is a topic; anything else a queue. `/queues/` coincides with RabbitMQ's
+  AMQP 1.0 addressing, while `/topics/` is amqgres's own counterpart — RabbitMQ has no topic
+  addresses (it models topics as exchanges). The capability stays the primary signal, so a JMS
+  `queue` attach is never reinterpreted whatever its address looks like.
 - Subscription naming follows Artemis (`SubscriptionNaming`): a durable subscription's queue is
   `clientId.subscriptionName` (stable across reconnects, so offline messages accumulate); a
   non-durable one is `nonDurable.connectionId.linkName` (private to the link).
@@ -186,7 +205,7 @@ Two PostgreSQL-specific choices:
 ## Package layout — by feature, not layer
 
 - `connection` — acceptor, per-connection loop, event dispatch, link registry, and terminus
-  resolution (`TerminusResolver` + `JmsTerminusResolver`, `SubscriptionNaming`).
+  resolution (`TerminusResolver` + `DefaultTerminusResolver`, `SubscriptionNaming`).
 - `queue` — queue registry (`QueueRepository`) and topic subscription bindings
   (`SubscriptionRepository`), each with per-backend implementations.
 - `message` — persistence, delivery locking, redelivery, lock reclaim, wire codec, and the
@@ -216,8 +235,13 @@ Where a scenario needs backend-specific SQL (e.g. back-dating `locked_at` for lo
 `backdatedLockedAt()`) each subclass implements, rather than branching on the backend. The
 `AmqpIntegrationTest`, `ReadmeConnectingClientIntegrationTest`, `QueueProvisioningTest`,
 `DeadLetterQueueIntegrationTest`, `TopicPubSubTest`, `TlsIntegrationTest`,
-`SaslAuthenticationTest` and `SaslTlsIntegrationTest` families all follow
-this shape — copy an existing trio. Store-level
+`SaslAuthenticationTest`, `SaslTlsIntegrationTest`, `SpringAmqpClientIntegrationTest` and
+`SpringAmqpClientPubSubTest` families all follow this shape — copy an existing trio. The
+`SpringAmqpClientIntegrationTest` and `SpringAmqpClientPubSubTest` families drive the broker with
+Spring AMQP's generic AMQP 1.0 client (`spring-amqp-client`, test scope, version-managed by Spring
+Boot) instead of JMS: the former covers the queue path (anonymous-relay send, capability-less
+consumer attach), the latter pub/sub through `@AmqpListener` and the address-based topic fallback.
+Store-level
 unit tests (`MessageStoreTest` / `SqliteMessageStoreTest`) are a separate pair with no shared base,
 asserting against the stores directly.
 

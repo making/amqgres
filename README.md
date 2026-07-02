@@ -3,7 +3,8 @@
 Amqgres is a small AMQP 1.0 message broker that stores its messages in a SQL database. It runs on
 PostgreSQL by default and can also run on SQLite for local development or single-instance
 deployments. It provides point-to-point queues and publish/subscribe topics for AMQP 1.0 clients
-(Qpid JMS, AMQP.NET Lite, Rhea.js and others) without requiring any additional messaging middleware.
+(Qpid JMS, Spring AMQP's `spring-amqp-client`, AMQP.NET Lite, Rhea.js and others) without requiring
+any additional messaging middleware.
 
 ## When to use it
 
@@ -329,6 +330,60 @@ subscription. Publishing to a topic with no subscriptions simply drops the messa
 `amqgres.topic.auto-create` (default `true`) allows attaching to any topic address; set it to `false`
 to restrict topics to those listed in `amqgres.topic.names`. Message selectors and shared
 subscriptions are not supported.
+
+## Generic AMQP 1.0 clients and addressing
+
+The JMS examples above rely on the Qpid JMS client telling the broker whether an address is a queue
+or a topic (a `topic` capability on the AMQP terminus). A generic AMQP 1.0 client — such as Spring
+AMQP's `spring-amqp-client` — sends no such capability, so the broker classifies the address
+itself, checking these rules in order:
+
+| Address | Resolved as |
+|---|---|
+| `/queues/<name>` | the queue `<name>` |
+| `/topics/<name>` | the topic `<name>` |
+| a bare name listed in `amqgres.topic.names` | that topic |
+| any other bare name | a queue of that name |
+
+The prefix is stripped, so `/topics/news` publishes to the same topic a JMS client reaches with
+`createTopic("news")`, and `/queues/orders` is the same queue as `orders`. The `/topics/` prefix is
+what lets a generic client use topics dynamically; a bare topic name only works when it is listed
+in `amqgres.topic.names`. Queue auto-create and `amqgres.topic.auto-create` apply exactly as they
+do for JMS clients. The `/queues/` form matches RabbitMQ's AMQP 1.0 addressing; `/topics/` is
+Amqgres's own counterpart, since RabbitMQ has no topic addresses (it models topics as exchanges).
+
+These rules apply both when a link attaches to an address and per message over the anonymous
+relay: the broker advertises the `ANONYMOUS-RELAY` capability, so a client that opens one
+address-less sender and routes each message by its `to` property (as `spring-amqp-client` does)
+works too. A message whose `to` cannot be resolved is rejected with `amqp:not-found` without
+affecting the link.
+
+For example, with Spring AMQP 4.1's `spring-amqp-client`:
+
+```java
+AmqpConnectionFactory connectionFactory = new SingleAmqpConnectionFactory()
+        .setHost("localhost")
+        .setPort(5672);
+AmqpClient client = AmqpClient.create(connectionFactory);
+
+// Point-to-point: a bare address is a queue.
+client.to("orders").body("hello").send().get(5, TimeUnit.SECONDS);
+Object body = client.from("orders").receiveAndConvert().get(5, TimeUnit.SECONDS);
+
+// Publish/subscribe: the /topics/ prefix makes the address a topic.
+client.to("/topics/news").body("breaking").send().get(5, TimeUnit.SECONDS);
+```
+
+A consumer attaching to a topic address becomes a (non-durable) subscription, including the
+event-driven `@AmqpListener` (which needs `@EnableAmqp` and an
+`AmqpMessageListenerContainerFactory` bean):
+
+```java
+@AmqpListener(addresses = "/topics/news")
+void onNews(String body) {
+    // Each subscriber receives its own copy of every message.
+}
+```
 
 ## Sending and receiving from the command line
 

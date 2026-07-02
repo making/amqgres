@@ -12,10 +12,10 @@ import org.jspecify.annotations.Nullable;
  * descriptor.
  *
  * <p>
- * The only implementation is {@link JmsTerminusResolver} (capability based, as sent by
- * the Qpid JMS client). Additional dialects (for example an address-driven convention for
- * generic AMQP 1.0 clients) can be added behind this port without touching the
- * dispatcher.
+ * The only implementation is {@link DefaultTerminusResolver}, which understands the Qpid
+ * JMS capability dialect and falls back to address-based classification (via
+ * {@code amqgres.topic.names}) for generic AMQP 1.0 clients that send no capabilities.
+ * Additional dialects can be added behind this port without touching the dispatcher.
  */
 public interface TerminusResolver {
 
@@ -38,12 +38,31 @@ public interface TerminusResolver {
 	@Nullable ConsumerAttach resolveConsumer(Sender sender, String connectionId);
 
 	/**
+	 * Classifies a bare address — one carrying no terminus capabilities — into a queue or
+	 * topic destination. Used as the attach-time fallback for clients that send no
+	 * capabilities, and for per-message routing on the anonymous relay, so both interpret
+	 * an address identically.
+	 * @param address the address to classify
+	 * @return the resolved destination
+	 */
+	Address resolveAddress(String address);
+
+	/**
 	 * A resolved producer attach.
 	 *
 	 * @param topic whether the target is a topic (fan-out) rather than a queue
 	 * @param name the topic name when {@code topic} is true, otherwise the queue name
 	 */
 	record ProducerAttach(boolean topic, String name) {
+	}
+
+	/**
+	 * A destination resolved from a bare address.
+	 *
+	 * @param topic whether the address names a topic (fan-out) rather than a queue
+	 * @param name the topic or queue name, stripped of any addressing prefix
+	 */
+	record Address(boolean topic, String name) {
 	}
 
 	/**

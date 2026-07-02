@@ -57,6 +57,7 @@ public class MessageCodec {
 		byte[] raw = Arrays.copyOfRange(payload, offset, offset + length);
 		String propertiesJson = null;
 		String applicationPropertiesJson = null;
+		String to = null;
 		try {
 			Decoder decoder = CodecFactory.getDefaultDecoder();
 			DecoderState state = decoder.newDecoderState();
@@ -64,6 +65,7 @@ public class MessageCodec {
 			while (buffer.isReadable()) {
 				Object section = decoder.readObject(buffer, state);
 				if (section instanceof Properties props) {
+					to = props.getTo();
 					propertiesJson = toJson(properties(props));
 				}
 				else if (section instanceof ApplicationProperties applicationProperties) {
@@ -76,7 +78,7 @@ public class MessageCodec {
 			// body.
 			log.debug("Failed to decode message properties for observability", ex);
 		}
-		return new DecodedMessage(raw, propertiesJson, applicationPropertiesJson);
+		return new DecodedMessage(raw, to, propertiesJson, applicationPropertiesJson);
 	}
 
 	private @Nullable Map<String, Object> properties(Properties properties) {
@@ -166,9 +168,11 @@ public class MessageCodec {
 	}
 
 	/**
-	 * The parts of a message persisted to the {@code messages} table.
+	 * The parts of a message persisted to the {@code messages} table, plus the {@code to}
+	 * address from the properties section, which an anonymous-relay producer link uses to
+	 * route each delivery.
 	 */
-	public record DecodedMessage(byte[] raw, @Nullable String propertiesJson,
+	public record DecodedMessage(byte[] raw, @Nullable String to, @Nullable String propertiesJson,
 			@Nullable String applicationPropertiesJson) {
 	}
 

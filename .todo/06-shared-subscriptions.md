@@ -17,5 +17,5 @@ subscription) are not yet honoured.
 
 ## Notes
 - `SubscriptionNaming` already computes stable names; extend it for the shared forms.
-- Point of change: `JmsTerminusResolver`, `SubscriptionNaming`, `EventDispatcher` teardown (reference
+- Point of change: `DefaultTerminusResolver`, `SubscriptionNaming`, `EventDispatcher` teardown (reference
   counting for the last-consumer-wins removal of non-durable shared subscriptions).

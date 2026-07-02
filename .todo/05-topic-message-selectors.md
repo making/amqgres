@@ -18,5 +18,5 @@ message selectors and `noLocal` are ignored.
 ## Notes
 - Persist the selector text alongside the subscription (extend the `subscriptions` table with a
   nullable `selector` column) so a durable subscription keeps filtering while offline.
-- Point of change: `JmsTerminusResolver` (parse filter), `SubscriptionRepository` (store selector),
+- Point of change: `DefaultTerminusResolver` (parse filter), `SubscriptionRepository` (store selector),
   `EventDispatcher.onIncoming` fan-out (evaluate).
