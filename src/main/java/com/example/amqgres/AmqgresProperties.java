@@ -1,6 +1,8 @@
 package com.example.amqgres;
 
 import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
 
 import org.jspecify.annotations.Nullable;
 
@@ -18,6 +20,21 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 public record AmqgresProperties(@DefaultValue Storage storage, @DefaultValue Listen listen, @DefaultValue Link link,
 		@DefaultValue Queue queue, @DefaultValue Topic topic, @DefaultValue Redelivery redelivery,
 		@DefaultValue Lock lock, @DefaultValue Tls tls, @DefaultValue Sasl sasl) {
+
+	/**
+	 * Rejects a name configured as both a queue and a topic. A bare address on
+	 * {@code amqgres.topic.names} is classified as a topic, which would make the
+	 * same-named queue unreachable by its bare name for capability-less clients and
+	 * silently divert their sends to the topic, so the overlap fails startup instead.
+	 */
+	public AmqgresProperties {
+		Set<String> overlap = new TreeSet<>(queue.names());
+		overlap.retainAll(topic.names());
+		if (!overlap.isEmpty()) {
+			throw new IllegalArgumentException(
+					"amqgres.queue.names and amqgres.topic.names must not share names, but both contain: " + overlap);
+		}
+	}
 
 	/**
 	 * Selects which storage backend persists queues and messages. Factory beans switch on
@@ -70,9 +87,9 @@ public record AmqgresProperties(@DefaultValue Storage storage, @DefaultValue Lis
 	 * creates the queue instead of rejecting the attach with {@code amqp:not-found}; set
 	 * to {@code false} to only allow attaches to pre-registered queues
 	 * @param names queue names created at startup if they do not already exist; applies
-	 * to every backend
+	 * to every backend and must not overlap {@code amqgres.topic.names}
 	 */
-	public record Queue(@DefaultValue("true") boolean autoCreate, @DefaultValue List<String> names) {
+	public record Queue(@DefaultValue("true") boolean autoCreate, @DefaultValue Set<String> names) {
 	}
 
 	/**
@@ -84,9 +101,10 @@ public record AmqgresProperties(@DefaultValue Storage storage, @DefaultValue Lis
 	 * is allowed; set to {@code false} to restrict topics to those listed in
 	 * {@code names}
 	 * @param names topic names that are always accepted, even when {@code autoCreate} is
-	 * {@code false}
+	 * {@code false}; a bare address on this list is classified as a topic, so it must not
+	 * overlap {@code amqgres.queue.names}
 	 */
-	public record Topic(@DefaultValue("true") boolean autoCreate, @DefaultValue List<String> names) {
+	public record Topic(@DefaultValue("true") boolean autoCreate, @DefaultValue Set<String> names) {
 	}
 
 	/**

@@ -386,7 +386,10 @@ dead-lettering) apply per subscription. Publishing to a topic with no subscripti
 the message.
 
 `amqgres.topic.auto-create` (default `true`) allows attaching to any topic address; set it to `false`
-to restrict topics to those listed in `amqgres.topic.names`. Message selectors and shared
+to restrict topics to those listed in `amqgres.topic.names`. A name may not appear in both
+`amqgres.queue.names` and `amqgres.topic.names` — the broker refuses to start, because a bare
+address on the topic list is classified as a topic and would silently shadow the same-named queue
+for [generic AMQP 1.0 clients](#generic-amqp-10-clients). Message selectors and shared
 subscriptions are not supported.
 
 ### Generic AMQP 1.0 clients
