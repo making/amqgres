@@ -17,6 +17,7 @@ import org.springframework.amqp.client.SingleAmqpConnectionFactory;
 import org.springframework.amqp.client.listener.AmqpMessageListenerContainer;
 import org.springframework.amqp.core.Message;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.amqp.support.converter.JacksonJsonMessageConverter;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
@@ -75,6 +76,29 @@ abstract class AbstractSpringAmqpClientIntegrationTest {
 
 			assertThat(received).isEqualTo("hello generic amqp");
 			assertThat(readyCount("generic")).isZero();
+		}
+		finally {
+			factory.destroy();
+		}
+	}
+
+	@Test
+	void typedReceiveWithSmartMessageConverter() throws Exception {
+		this.queueRepository.create("typed");
+		SingleAmqpConnectionFactory factory = connectionFactory();
+		try {
+			// A SmartMessageConverter (here the Jackson-based JSON converter) allows
+			// receiveAndConvert() to be called with a non-Object generic type.
+			AmqpClient client = AmqpClient.builder(factory).messageConverter(new JacksonJsonMessageConverter()).build();
+
+			client.to("typed").body("hello typed").send().get(5, TimeUnit.SECONDS);
+
+			String received = client.from("typed")
+				.timeout(Duration.ofSeconds(5))
+				.<String>receiveAndConvert()
+				.get(5, TimeUnit.SECONDS);
+
+			assertThat(received).isEqualTo("hello typed");
 		}
 		finally {
 			factory.destroy();

@@ -6,6 +6,27 @@ deployments. It provides point-to-point queues and publish/subscribe topics for 
 (Qpid JMS, Spring AMQP's `spring-amqp-client`, AMQP.NET Lite, Rhea.js and others) without requiring
 any additional messaging middleware.
 
+- [When to use it](#when-to-use-it)
+- [Requirements](#requirements)
+- [Quick start](#quick-start)
+- [Running the broker](#running-the-broker)
+  - [Docker](#docker)
+  - [Build and run from source](#build-and-run-from-source)
+  - [GraalVM native image](#graalvm-native-image)
+- [Configuration](#configuration)
+  - [Configuration properties](#configuration-properties)
+  - [Storage backend: PostgreSQL or SQLite](#storage-backend-postgresql-or-sqlite)
+  - [Creating queues](#creating-queues)
+  - [TLS](#tls)
+  - [Authentication (SASL)](#authentication-sasl)
+- [Connecting clients](#connecting-clients)
+  - [Qpid JMS](#qpid-jms)
+  - [Delivery semantics](#delivery-semantics)
+  - [Publish/subscribe with topics](#publishsubscribe-with-topics)
+  - [Generic AMQP 1.0 clients and addressing](#generic-amqp-10-clients-and-addressing)
+  - [Sending and receiving from the command line](#sending-and-receiving-from-the-command-line)
+- [Running the tests](#running-the-tests)
+
 ## When to use it
 
 Use Amqgres when:
@@ -21,46 +42,93 @@ than AMQP 1.0, message priority and scheduled delivery, and any management web i
 
 ## Requirements
 
-- Java 25
+- Java 25 (not needed when running the prebuilt Docker images)
 - PostgreSQL 14 or later, or SQLite (bundled through the JDBC driver, no server needed)
 
-## Getting started
+## Quick start
 
-### 1. Prepare the database
+The fastest way to try Amqgres is the prebuilt native Docker image with the SQLite backend — no
+database server, JDK or build step required:
 
-Point Amqgres at a database. The tables and indexes are created automatically on startup
-(`schema-postgres.sql` or `schema-sqlite.sql`, selected by the storage backend). Clients can only
-attach to queues that exist, so a queue has to be created before it is used. There are two ways to
-do this.
-
-### Create queues through the broker (properties)
-
-`amqgres.queue.auto-create` is enabled by default: the first time a client attaches to an address,
-the queue is created. In this mode no explicit registration step is needed. Set it to `false` to
-require queues to exist up front, in which case an attach to an unknown address is refused with
-`amqp:not-found`.
-
-`amqgres.queue.names` creates the listed queues at startup, whether or not auto-create is on. This
-is handy for provisioning known queues ahead of the first client and for SQLite, whose database
-file only the broker's host can open:
-
-```properties
-# Create a queue on demand when a client attaches to an unknown address (default true).
-amqgres.queue.auto-create=true
-# Also create these queues at startup if they do not already exist.
-amqgres.queue.names=orders,events
+```shell
+docker run --rm -p 5672:5672 ghcr.io/making/amqgres:native \
+  --spring.profiles.active=sqlite
 ```
 
-### Create queues by inserting into the `queues` table
+The broker now accepts AMQP 1.0 connections on `localhost:5672`. No queue has to be declared
+beforehand: `amqgres.queue.auto-create` is enabled by default, so a queue is created the first
+time a client attaches to its address. Any AMQP 1.0 client can talk to it: see [Connecting clients](#connecting-clients) for JMS and Spring
+AMQP code, or [Sending and receiving from the command line](#sending-and-receiving-from-the-command-line)
+to exchange messages without writing any code. To run against PostgreSQL or to build the broker
+yourself, read on.
 
-Queues can also be registered directly in the database. With PostgreSQL this works from any host
-that can reach it:
+## Running the broker
 
-```sql
-INSERT INTO queues(name) VALUES ('orders');
+### Docker
+
+Prebuilt images are published to GitHub Container Registry, so neither a JDK nor a build step is
+needed to run the broker. There are two, both carrying both storage backends:
+
+- `ghcr.io/making/amqgres:jvm` — the JVM build.
+- `ghcr.io/making/amqgres:native` — the GraalVM native image (faster startup, lower memory).
+
+The broker listens on `5672`, so that port has to be published with `-p`. Application arguments are
+passed straight through, exactly as on the JVM. For a self-contained run backed by SQLite:
+
+```shell
+docker run --rm -p 5672:5672 ghcr.io/making/amqgres:native \
+  --spring.profiles.active=sqlite
 ```
 
-### 2. Configure
+To run against PostgreSQL (the default profile), point the datasource at your database:
+
+```shell
+docker run --rm -p 5672:5672 \
+  -e SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/amqgres \
+  -e SPRING_DATASOURCE_USERNAME=amqgres \
+  -e SPRING_DATASOURCE_PASSWORD=amqgres \
+  ghcr.io/making/amqgres:native
+```
+
+Swap `:native` for `:jvm` to use the JVM image; the arguments and environment variables are the
+same.
+
+### Build and run from source
+
+```shell
+./mvnw package
+java -jar target/amqgres-0.0.1-SNAPSHOT.jar
+```
+
+This starts the broker with the default `postgres` profile; pass
+`--spring.profiles.active=sqlite` for the SQLite backend (see
+[Storage backend](#storage-backend-postgresql-or-sqlite)).
+
+### GraalVM native image
+
+With a GraalVM JDK, build a native image with the `native` profile:
+
+```shell
+./mvnw -Pnative native:compile
+./target/amqgres
+```
+
+A single native image supports both backends; the backend is chosen at startup with the profile,
+exactly as on the JVM:
+
+```shell
+./target/amqgres --spring.profiles.active=sqlite
+./target/amqgres --spring.profiles.active=postgres
+```
+
+Both JDBC drivers are included, and the storage beans are picked by a factory that runs at startup
+rather than by build-time conditions, so no backend-specific build is needed. The bundled SQLite
+driver (`sqlite-jdbc`) ships GraalVM reachability metadata, so no manual native configuration is
+required either.
+
+## Configuration
+
+### Configuration properties
 
 Database connectivity uses the standard Spring Boot `spring.datasource.*` properties. Amqgres
 specific settings use the `amqgres.*` namespace. Defaults are shown below:
@@ -97,6 +165,73 @@ amqgres.sasl.mechanism=ANONYMOUS
 
 Any property can be overridden with environment variables, for example
 `SPRING_DATASOURCE_URL` or `AMQGRES_LISTEN_PORT`.
+
+### Storage backend: PostgreSQL or SQLite
+
+The backend is selected by a Spring profile, either `postgres` (the default) or `sqlite`. Each
+profile sets `amqgres.storage.type` and a matching datasource in `application.properties`, so
+activating a profile is all that is normally needed:
+
+```shell
+# PostgreSQL (default)
+java -jar target/amqgres-0.0.1-SNAPSHOT.jar
+
+# SQLite
+java -jar target/amqgres-0.0.1-SNAPSHOT.jar --spring.profiles.active=sqlite
+```
+
+Whichever backend is active, no manual schema setup is needed: the tables and indexes are created
+automatically on startup (`schema-postgres.sql` or `schema-sqlite.sql`, selected by the storage
+backend).
+
+The `sqlite` profile defaults the datasource to a local `/tmp/amqgres.db` file. To point it at
+another file, override just the path with `amqgres.sqlite.path`; the mandatory `journal_mode=WAL`
+and `busy_timeout` JDBC parameters are appended for you:
+
+```bash
+java -jar target/amqgres-0.0.1-SNAPSHOT.jar --spring.profiles.active=sqlite \
+  --amqgres.sqlite.path=/data/amqgres.db
+```
+
+`journal_mode=WAL` and `busy_timeout` let the broker's connection pool share SQLite's single writer
+without `SQLITE_BUSY` errors. A `:memory:` path is not usable, because each pooled connection would
+open its own separate database.
+
+The SQLite backend wakes waiting consumers in process rather than through PostgreSQL
+`LISTEN`/`NOTIFY`, so a SQLite database must be used by a single broker instance only. PostgreSQL
+remains the option for running several broker instances against one database.
+
+### Creating queues
+
+Clients can only attach to queues that exist, so a queue has to be created before it is used.
+There are three ways to do this; all of them can be combined.
+
+**Auto-create on attach.** `amqgres.queue.auto-create` is enabled by default: the first time a
+client attaches to an address, the queue is created. In this mode no explicit registration step is
+needed. Set it to `false` to require queues to exist up front, in which case an attach to an
+unknown address is refused with `amqp:not-found`.
+
+**Seed queues at startup.** `amqgres.queue.names` creates the listed queues at startup, whether or
+not auto-create is on. This is handy for provisioning known queues ahead of the first client and
+for SQLite, whose database file only the broker's host can open:
+
+```properties
+# Create a queue on demand when a client attaches to an unknown address (default true).
+amqgres.queue.auto-create=true
+# Also create these queues at startup if they do not already exist.
+amqgres.queue.names=orders,events
+```
+
+**Insert into the `queues` table.** Queues can also be registered directly in the database. With
+PostgreSQL this works from any host that can reach it:
+
+```sql
+INSERT INTO queues(name) VALUES ('orders');
+```
+
+Topics, by contrast, need no pre-registration: they are not rows in the `queues` table, and
+`amqgres.topic.auto-create` (default `true`) allows attaching to any topic address. See
+[Publish/subscribe with topics](#publishsubscribe-with-topics).
 
 ### TLS
 
@@ -166,100 +301,15 @@ JmsConnectionFactory factory = new JmsConnectionFactory("amqgres", "changeme",
 A wrong username or password is refused during the SASL exchange with the `auth` failure code
 (surfaced by Qpid JMS as a `JMSSecurityException`), and a client without credentials cannot
 connect at all because `ANONYMOUS` is not offered. PLAIN transmits the password in the clear, so
-combine it with TLS in production.
+combine it with [TLS](#tls) in production.
 
-### Choosing the storage backend
+## Connecting clients
 
-The backend is selected by a Spring profile, either `postgres` (the default) or `sqlite`. Each
-profile sets `amqgres.storage.type` and a matching datasource in `application.properties`, so
-activating a profile is all that is normally needed:
+Amqgres speaks plain AMQP 1.0 over TCP, so any AMQP 1.0 client library works. The sections below
+show the same broker used from Qpid JMS, from a generic AMQP 1.0 client (Spring AMQP's
+`spring-amqp-client`), and from the command line.
 
-```shell
-# PostgreSQL (default)
-java -jar target/amqgres-0.0.1-SNAPSHOT.jar
-
-# SQLite
-java -jar target/amqgres-0.0.1-SNAPSHOT.jar --spring.profiles.active=sqlite
-```
-
-The `sqlite` profile defaults the datasource to a local `/tmp/amqgres.db` file. To point it at
-another file, override just the path with `amqgres.sqlite.path`; the mandatory `journal_mode=WAL`
-and `busy_timeout` JDBC parameters are appended for you:
-
-```bash
-java -jar target/amqgres-0.0.1-SNAPSHOT.jar --spring.profiles.active=sqlite \
-  --amqgres.sqlite.path=/data/amqgres.db
-```
-
-`journal_mode=WAL` and `busy_timeout` let the broker's connection pool share SQLite's single writer
-without `SQLITE_BUSY` errors. A `:memory:` path is not usable, because each pooled connection would
-open its own separate database.
-
-The SQLite backend wakes waiting consumers in process rather than through PostgreSQL
-`LISTEN`/`NOTIFY`, so a SQLite database must be used by a single broker instance only. PostgreSQL
-remains the option for running several broker instances against one database.
-
-### 3. Build and run
-
-```shell
-./mvnw package
-java -jar target/amqgres-0.0.1-SNAPSHOT.jar
-```
-
-With a GraalVM JDK, build a native image with the `native` profile:
-
-```shell
-./mvnw -Pnative native:compile
-./target/amqgres
-```
-
-A single native image supports both backends; the backend is chosen at startup with the profile,
-exactly as on the JVM:
-
-```shell
-./mvnw -Pnative native:compile
-./target/amqgres --spring.profiles.active=sqlite
-./target/amqgres --spring.profiles.active=postgres
-```
-
-Both JDBC drivers are included, and the storage beans are picked by a factory that runs at startup
-rather than by build-time conditions, so no backend-specific build is needed. The bundled SQLite
-driver (`sqlite-jdbc`) ships GraalVM reachability metadata, so no manual native configuration is
-required either.
-
-### Run with Docker
-
-Prebuilt images are published to GitHub Container Registry, so neither a JDK nor a build step is
-needed to run the broker. There are two, both carrying both storage backends:
-
-- `ghcr.io/making/amqgres:jvm` — the JVM build.
-- `ghcr.io/making/amqgres:native` — the GraalVM native image (faster startup, lower memory).
-
-The broker listens on `5672`, so that port has to be published with `-p`. Application arguments are
-passed straight through, exactly as on the JVM. For a self-contained run backed by SQLite:
-
-```shell
-docker run --rm -p 5672:5672 ghcr.io/making/amqgres:native \
-  --spring.profiles.active=sqlite --amqgres.queue.names=orders
-```
-
-To run against PostgreSQL (the default profile), point the datasource at your database:
-
-```shell
-docker run --rm -p 5672:5672 \
-  -e SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/amqgres \
-  -e SPRING_DATASOURCE_USERNAME=amqgres \
-  -e SPRING_DATASOURCE_PASSWORD=amqgres \
-  ghcr.io/making/amqgres:native
-```
-
-Swap `:native` for `:jvm` to use the JVM image; the arguments and environment variables are the
-same.
-
-
-## Connecting a client
-
-Amqgres speaks plain AMQP 1.0 over TCP. The example below uses Qpid JMS:
+### Qpid JMS
 
 ```java
 JmsConnectionFactory factory = new JmsConnectionFactory("amqp://localhost:5672");
@@ -284,9 +334,10 @@ client-side `Queue` object naming the address. The queue is actually created whe
 consumer attaches to it, and only because `amqgres.queue.auto-create` is enabled (the default). With
 `amqgres.queue.auto-create=false` the same code fails: attaching to an address that has not been
 provisioned up front is refused with `amqp:not-found`. AMQP 1.0 itself has no queue declaration, so
-this is a broker-side policy, not a protocol or JMS feature.
+this is a broker-side policy, not a protocol or JMS feature. See
+[Creating queues](#creating-queues) for the provisioning options.
 
-Delivery semantics:
+### Delivery semantics
 
 - A received message is locked, not removed. Acknowledging it (`accepted`) deletes it.
 - Releasing or rejecting a message returns it for redelivery until `redelivery.max-count` is
@@ -294,7 +345,7 @@ Delivery semantics:
 - If a consumer disconnects without acknowledging, the message lock expires after
   `lock.timeout-seconds` and the message becomes deliverable again.
 
-## Publish/subscribe with topics
+### Publish/subscribe with topics
 
 A topic delivers a copy of every published message to each subscription, rather than sharing
 messages between competing consumers as a queue does. Use `session.createTopic(...)` and the broker
@@ -323,15 +374,16 @@ Two kinds of subscription are supported:
   id and subscription name, it keeps accumulating messages while the subscriber is offline and
   redelivers them on reconnect. `Session.unsubscribe(name)` removes it.
 
-Internally a subscription is an ordinary queue that the topic fans messages out to, so all the queue
-delivery semantics above (locking, acknowledgement, redelivery, dead-lettering) apply per
-subscription. Publishing to a topic with no subscriptions simply drops the message.
+Internally a subscription is an ordinary queue that the topic fans messages out to, so all the
+[delivery semantics](#delivery-semantics) above (locking, acknowledgement, redelivery,
+dead-lettering) apply per subscription. Publishing to a topic with no subscriptions simply drops
+the message.
 
 `amqgres.topic.auto-create` (default `true`) allows attaching to any topic address; set it to `false`
 to restrict topics to those listed in `amqgres.topic.names`. Message selectors and shared
 subscriptions are not supported.
 
-## Generic AMQP 1.0 clients and addressing
+### Generic AMQP 1.0 clients and addressing
 
 The JMS examples above rely on the Qpid JMS client telling the broker whether an address is a queue
 or a topic (a `topic` capability on the AMQP terminus). A generic AMQP 1.0 client — such as Spring
@@ -358,20 +410,32 @@ address-less sender and routes each message by its `to` property (as `spring-amq
 works too. A message whose `to` cannot be resolved is rejected with `amqp:not-found` without
 affecting the link.
 
-For example, with Spring AMQP 4.1's `spring-amqp-client`:
+For example, with Spring AMQP 4.1's `spring-amqp-client`. The client is asynchronous: every
+operation returns a `CompletableFuture`, meant to be composed with `thenAccept`/`thenCompose`
+rather than blocked on with `get()`:
 
 ```java
 AmqpConnectionFactory connectionFactory = new SingleAmqpConnectionFactory()
         .setHost("localhost")
         .setPort(5672);
-AmqpClient client = AmqpClient.create(connectionFactory);
+// A SmartMessageConverter (here the Jackson-based JSON converter) lets
+// receiveAndConvert() return a typed CompletableFuture below.
+AmqpClient client = AmqpClient.builder(connectionFactory)
+        .messageConverter(new JacksonJsonMessageConverter())
+        .build();
 
-// Point-to-point: a bare address is a queue.
-client.to("orders").body("hello").send().get(5, TimeUnit.SECONDS);
-Object body = client.from("orders").receiveAndConvert().get(5, TimeUnit.SECONDS);
+// Point-to-point: a bare address not listed in amqgres.topic.names is a queue.
+// send() completes with true once the broker accepts the message.
+CompletableFuture<Boolean> sent = client.to("orders").body("hello").send();
+
+// receiveAndConvert() completes when a message arrives (or the timeout elapses).
+CompletableFuture<String> received = client.from("orders")
+        .timeout(Duration.ofSeconds(5))
+        .<String>receiveAndConvert();
+received.thenAccept(body -> System.out.println("Received: " + body));
 
 // Publish/subscribe: the /topics/ prefix makes the address a topic.
-client.to("/topics/news").body("breaking").send().get(5, TimeUnit.SECONDS);
+CompletableFuture<Boolean> published = client.to("/topics/news").body("breaking").send();
 ```
 
 A consumer attaching to a topic address becomes a (non-durable) subscription, including the
@@ -385,7 +449,7 @@ void onNews(String body) {
 }
 ```
 
-## Sending and receiving from the command line
+### Sending and receiving from the command line
 
 Because Amqgres speaks plain AMQP 1.0, any AMQP 1.0 client works as a quick smoke test. The
 [Apache ActiveMQ Artemis](https://activemq.apache.org/components/artemis/) CLI is convenient because
@@ -401,13 +465,17 @@ tar xzf apache-artemis-2.44.0-bin.tar.gz
 export PATH="$PWD/apache-artemis-2.44.0/bin:$PATH"
 ```
 
-Start the broker with a queue named `demo` (SQLite, no server needed). The prebuilt native image
-avoids a local build; `-p 5672:5672` publishes the AMQP port:
+Start the broker (SQLite, no server needed). The prebuilt native image avoids a local build;
+`-p 5672:5672` publishes the AMQP port. The `demo` queue used below needs no declaration: it is
+created the first time the producer attaches, because `amqgres.queue.auto-create` is enabled by
+default:
 
 ```shell
 docker run --rm -p 5672:5672 ghcr.io/making/amqgres:native \
-  --spring.profiles.active=sqlite --amqgres.queue.names=demo
+  --spring.profiles.active=sqlite
 ```
+
+#### Send and receive on a queue
 
 Send three text messages to the `demo` queue:
 
@@ -439,10 +507,11 @@ With `--verbose` each message is printed as it arrives, for example
 `Consumer demo, thread=0 Received Hello from Artemis CLI`. The consumer acknowledges every
 message it receives, so a second run returns nothing until new messages are sent. (The default
 caps a single run at 1000 messages; pass a larger `--message-count` to drain a bigger backlog.)
-Omitting `--amqgres.queue.names=demo` also works while `amqgres.queue.auto-create` is enabled
-(the default): the queue is created the first time the producer attaches.
+With `amqgres.queue.auto-create=false` the queue would have to be provisioned up front instead,
+for example by starting the broker with `--amqgres.queue.names=demo` (see
+[Creating queues](#creating-queues)).
 
-### Publish/subscribe to a topic
+#### Publish/subscribe to a topic
 
 A `topic://` destination exercises the publish/subscribe path instead of a queue. The important
 difference is ordering: a non-durable subscription only receives messages published while it is
