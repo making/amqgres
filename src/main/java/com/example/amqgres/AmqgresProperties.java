@@ -102,9 +102,15 @@ public record AmqgresProperties(@DefaultValue Storage storage, @DefaultValue Lis
 	}
 
 	/**
-	 * TLS options. TLS is optional in the initial implementation.
+	 * TLS options. Plaintext remains the default; enabling TLS requires naming a Spring
+	 * Boot SSL bundle that carries the key material.
+	 *
+	 * @param enabled when {@code true}, the acceptor speaks TLS instead of plaintext
+	 * @param bundle name of the Spring Boot SSL bundle ({@code spring.ssl.bundle.*})
+	 * providing the server certificate and private key; required when {@code enabled} is
+	 * {@code true}
 	 */
-	public record Tls(@DefaultValue("false") boolean enabled) {
+	public record Tls(@DefaultValue("false") boolean enabled, @Nullable String bundle) {
 	}
 
 	/**

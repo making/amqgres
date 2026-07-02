@@ -88,10 +88,56 @@ amqgres.redelivery.dead-letter-queue=
 # A delivery lock older than this is reclaimed.
 amqgres.lock.timeout-seconds=30
 amqgres.lock.reclaim-interval-seconds=5
+# Serve AMQP over TLS; requires amqgres.tls.bundle when enabled.
+amqgres.tls.enabled=false
 ```
 
 Any property can be overridden with environment variables, for example
 `SPRING_DATASOURCE_URL` or `AMQGRES_LISTEN_PORT`.
+
+### TLS
+
+TLS is off by default. To serve AMQP over TLS, enable it and name a
+[Spring Boot SSL bundle](https://docs.spring.io/spring-boot/reference/features/ssl.html) that
+carries the server certificate and private key. Both PEM and Java keystore bundles work:
+
+```properties
+amqgres.tls.enabled=true
+amqgres.tls.bundle=amqgres
+
+# PEM certificate and private key...
+spring.ssl.bundle.pem.amqgres.keystore.certificate=file:/etc/amqgres/server-cert.pem
+spring.ssl.bundle.pem.amqgres.keystore.private-key=file:/etc/amqgres/server-key.pem
+
+# ...or a PKCS12/JKS keystore.
+#spring.ssl.bundle.jks.amqgres.keystore.location=file:/etc/amqgres/server.p12
+#spring.ssl.bundle.jks.amqgres.keystore.password=changeit
+```
+
+With TLS enabled the broker accepts only TLS connections on `amqgres.listen.port`; plaintext
+clients are refused during the handshake. Clients connect with an `amqps://` URL, for example with
+Qpid JMS and a JKS/PKCS12 truststore:
+
+```java
+JmsConnectionFactory factory = new JmsConnectionFactory(
+        "amqps://broker.example.com:5672?transport.trustStoreLocation=/path/to/truststore.p12"
+                + "&transport.trustStorePassword=changeit&transport.trustStoreType=PKCS12");
+```
+
+A client that is itself a Spring Boot application can keep the trust material in PEM as well, by
+defining a truststore-only SSL bundle and handing its `SSLContext` to the factory:
+
+```properties
+spring.ssl.bundle.pem.amqgres-client.truststore.certificate=file:/path/to/server-cert.pem
+```
+
+```java
+JmsConnectionFactory factory = new JmsConnectionFactory("amqps://broker.example.com:5672");
+factory.setSslContext(sslBundles.getBundle("amqgres-client").createSslContext());
+```
+
+Bundle options such as `spring.ssl.bundle.pem.amqgres.options.enabled-protocols` restrict the TLS
+protocol versions and cipher suites offered.
 
 ### Choosing the storage backend
 

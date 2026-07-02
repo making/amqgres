@@ -8,11 +8,16 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 
+import javax.net.ssl.SSLServerSocket;
+
 import com.example.amqgres.AmqgresProperties;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.springframework.boot.ssl.SslBundle;
+import org.springframework.boot.ssl.SslBundles;
+import org.springframework.boot.ssl.SslOptions;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Component;
 
@@ -32,6 +37,8 @@ public class AmqpServerLifecycle implements SmartLifecycle {
 
 	private final ExecutorService connectionExecutor;
 
+	private final SslBundles sslBundles;
+
 	private final Set<ConnectionHandler> connections = ConcurrentHashMap.newKeySet();
 
 	private volatile boolean running;
@@ -40,16 +47,18 @@ public class AmqpServerLifecycle implements SmartLifecycle {
 
 	private volatile @Nullable Thread acceptor;
 
-	public AmqpServerLifecycle(AmqpServices services, ExecutorService connectionExecutor) {
+	public AmqpServerLifecycle(AmqpServices services, ExecutorService connectionExecutor, SslBundles sslBundles) {
 		this.services = services;
 		this.connectionExecutor = connectionExecutor;
+		this.sslBundles = sslBundles;
 	}
 
 	@Override
 	public void start() {
 		AmqgresProperties.Listen listen = this.services.properties().listen();
+		boolean tlsEnabled = this.services.properties().tls().enabled();
 		try {
-			ServerSocket socket = new ServerSocket();
+			ServerSocket socket = createServerSocket();
 			socket.setReuseAddress(true);
 			socket.bind(new InetSocketAddress(listen.host(), listen.port()));
 			this.serverSocket = socket;
@@ -57,12 +66,48 @@ public class AmqpServerLifecycle implements SmartLifecycle {
 			// A non-daemon thread keeps the process alive while the broker is listening.
 			this.acceptor = new Thread(this::acceptLoop, "amqgres-acceptor");
 			this.acceptor.start();
-			log.info("AMQP acceptor listening on {}:{}", listen.host(), socket.getLocalPort());
+			log.info("AMQP acceptor listening on {}:{}{}", listen.host(), socket.getLocalPort(),
+					tlsEnabled ? " (TLS)" : "");
 		}
 		catch (IOException ex) {
 			throw new IllegalStateException("Failed to bind AMQP acceptor on " + listen.host() + ":" + listen.port(),
 					ex);
 		}
+	}
+
+	/**
+	 * Creates the listening socket: plaintext by default, or an {@link SSLServerSocket}
+	 * built from the SSL bundle named by {@code amqgres.tls.bundle} when
+	 * {@code amqgres.tls.enabled=true}. Sockets accepted from an {@code SSLServerSocket}
+	 * perform the TLS handshake lazily on their first read, which happens on the
+	 * connection's own reader thread — a slow handshake never blocks the acceptor.
+	 * @return the (not yet bound) server socket
+	 * @throws IOException if the socket cannot be created
+	 */
+	private ServerSocket createServerSocket() throws IOException {
+		AmqgresProperties.Tls tls = this.services.properties().tls();
+		if (!tls.enabled()) {
+			return new ServerSocket();
+		}
+		String bundleName = tls.bundle();
+		if (bundleName == null || bundleName.isBlank()) {
+			throw new IllegalStateException(
+					"amqgres.tls.bundle must name a configured SSL bundle when amqgres.tls.enabled=true");
+		}
+		SslBundle bundle = this.sslBundles.getBundle(bundleName);
+		SSLServerSocket socket = (SSLServerSocket) bundle.createSslContext()
+			.getServerSocketFactory()
+			.createServerSocket();
+		SslOptions options = bundle.getOptions();
+		String[] protocols = options.getEnabledProtocols();
+		if (protocols != null) {
+			socket.setEnabledProtocols(protocols);
+		}
+		String[] ciphers = options.getCiphers();
+		if (ciphers != null) {
+			socket.setEnabledCipherSuites(ciphers);
+		}
+		return socket;
 	}
 
 	@Override

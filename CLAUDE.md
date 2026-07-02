@@ -30,6 +30,20 @@ Engine objects are not thread-safe, so all engine access for one connection is c
 This is why `ConnectionContext.submit` exists and nothing off the processor thread calls the engine:
 indirection instead of locks around the engine.
 
+## TLS
+
+`amqgres.tls.enabled=true` makes the acceptor build its listening socket from the Spring Boot SSL
+bundle named by `amqgres.tls.bundle` (`AmqpServerLifecycle.createServerSocket`); a bundle was chosen
+over bespoke keystore-path properties because it covers PEM and JKS key material plus
+protocol/cipher options without new configuration surface. The handshake is deliberately not driven
+on the acceptor thread: an accepted `SSLSocket` handshakes lazily on its first read, which happens
+on the connection's own reader virtual thread, so a slow handshake never stalls accept. Plaintext
+remains the default; the TLS tests (`TlsIntegrationTest` family) use a checked-in self-signed
+certificate under `src/test/resources/tls` (regeneration commands are in
+`AbstractTlsIntegrationTest`'s javadoc). TLS was also verified against the GraalVM native image by
+booting it with the PEM bundle and completing a TLSv1.3 send/receive round trip over `amqps://`;
+like the storage backends, the JVM test suite does not cover the native binary.
+
 ## Full message stored, not just the body
 
 The entire encoded message is stored in `body`; `properties` / `application-properties` are also
@@ -183,8 +197,8 @@ Where a scenario needs backend-specific SQL (e.g. back-dating `locked_at` for lo
 `now() - interval` vs `datetime('now', ...)`), the base declares a `protected abstract` hook (e.g.
 `backdatedLockedAt()`) each subclass implements, rather than branching on the backend. The
 `AmqpIntegrationTest`, `ReadmeConnectingClientIntegrationTest`, `QueueProvisioningTest`,
-`DeadLetterQueueIntegrationTest` and `TopicPubSubTest` families all follow this shape — copy an
-existing trio. Store-level
+`DeadLetterQueueIntegrationTest`, `TopicPubSubTest` and `TlsIntegrationTest` families all follow
+this shape — copy an existing trio. Store-level
 unit tests (`MessageStoreTest` / `SqliteMessageStoreTest`) are a separate pair with no shared base,
 asserting against the stores directly.
 
