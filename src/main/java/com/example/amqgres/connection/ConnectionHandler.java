@@ -41,14 +41,14 @@ public final class ConnectionHandler implements ConnectionContext, Runnable {
 
 	private static final long HEARTBEAT_INTERVAL_MILLIS = 5000;
 
-	private static final String[] SASL_MECHANISMS = { "ANONYMOUS", "PLAIN" };
-
 	private static final Runnable POISON = () -> {
 	};
 
 	private final Socket socket;
 
 	private final AmqpServices services;
+
+	private final SaslAuthenticator authenticator;
 
 	private final String connectionId;
 
@@ -65,6 +65,7 @@ public final class ConnectionHandler implements ConnectionContext, Runnable {
 	public ConnectionHandler(Socket socket, AmqpServices services) {
 		this.socket = socket;
 		this.services = services;
+		this.authenticator = new SaslAuthenticator(services.properties().sasl());
 		this.connectionId = "conn-" + COUNTER.incrementAndGet();
 	}
 
@@ -83,7 +84,7 @@ public final class ConnectionHandler implements ConnectionContext, Runnable {
 			engine.outputHandler(this::writeOutput);
 			engine.errorHandler((failed) -> requestStop());
 			engine.shutdownHandler((stopped) -> requestStop());
-			engine.saslDriver().server().setListener(new SaslApprovals());
+			engine.saslDriver().server().setListener(new SaslNegotiator());
 			EventDispatcher eventDispatcher = new EventDispatcher(this.services, this);
 			eventDispatcher.install(engine.connection());
 			this.dispatcher = eventDispatcher;
@@ -228,24 +229,56 @@ public final class ConnectionHandler implements ConnectionContext, Runnable {
 	}
 
 	/**
-	 * Minimal SASL server that accepts ANONYMOUS and PLAIN without validating
-	 * credentials.
+	 * SASL server for the single configured mechanism. ANONYMOUS accepts every client;
+	 * PLAIN validates the client's response through the {@link SaslAuthenticator} and
+	 * refuses a mismatch with the {@code auth} outcome. A PLAIN init without an initial
+	 * response is answered with an empty challenge, and the credentials are then taken
+	 * from the challenge response.
 	 */
-	private final class SaslApprovals implements SaslServerListener {
+	private final class SaslNegotiator implements SaslServerListener {
 
 		@Override
 		public void handleSaslHeader(SaslServerContext context, AMQPHeader header) {
-			context.sendMechanisms(SASL_MECHANISMS);
+			context.sendMechanisms(ConnectionHandler.this.authenticator.mechanisms());
 		}
 
 		@Override
 		public void handleSaslInit(SaslServerContext context, Symbol mechanism, ProtonBuffer initResponse) {
-			context.sendOutcome(SaslOutcome.SASL_OK, null);
+			SaslAuthenticator authenticator = ConnectionHandler.this.authenticator;
+			if (!authenticator.offers(mechanism.toString())) {
+				refuse(context, mechanism.toString());
+				return;
+			}
+			if (authenticator.anonymous()) {
+				context.sendOutcome(SaslOutcome.SASL_OK, null);
+				return;
+			}
+			if (initResponse.getReadableBytes() == 0) {
+				context.sendChallenge(ProtonBufferAllocator.defaultAllocator().copy(new byte[0]));
+				return;
+			}
+			decide(context, mechanism.toString(), initResponse);
 		}
 
 		@Override
 		public void handleSaslResponse(SaslServerContext context, ProtonBuffer response) {
-			context.sendOutcome(SaslOutcome.SASL_OK, null);
+			decide(context, "PLAIN", response);
+		}
+
+		private void decide(SaslServerContext context, String mechanism, ProtonBuffer response) {
+			byte[] bytes = new byte[response.getReadableBytes()];
+			response.readBytes(bytes, 0, bytes.length);
+			if (ConnectionHandler.this.authenticator.authenticatePlain(bytes)) {
+				context.sendOutcome(SaslOutcome.SASL_OK, null);
+			}
+			else {
+				refuse(context, mechanism);
+			}
+		}
+
+		private void refuse(SaslServerContext context, String mechanism) {
+			log.info("Connection {} refused: {} authentication failed", ConnectionHandler.this.connectionId, mechanism);
+			context.sendOutcome(SaslOutcome.SASL_AUTH, null);
 		}
 
 	}

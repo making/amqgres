@@ -114,8 +114,41 @@ public record AmqgresProperties(@DefaultValue Storage storage, @DefaultValue Lis
 	}
 
 	/**
-	 * SASL options. Only PLAIN and ANONYMOUS are accepted in the initial implementation.
+	 * SASL options. The broker advertises exactly the configured mechanism: with
+	 * {@code ANONYMOUS} (the default) any client is accepted and the broker stays open;
+	 * with {@code PLAIN} the client's initial response is decoded and validated against
+	 * {@code users}, and a mismatch is refused with the {@code auth} SASL code.
+	 *
+	 * @param mechanism the single SASL mechanism offered to clients
+	 * @param users the credentials accepted for {@code PLAIN}; an empty list means no
+	 * client can authenticate
 	 */
-	public record Sasl(@DefaultValue("PLAIN") String mechanism) {
+	public record Sasl(@DefaultValue("ANONYMOUS") Mechanism mechanism, @DefaultValue List<User> users) {
+
+		/**
+		 * Supported SASL mechanisms.
+		 */
+		public enum Mechanism {
+
+			/**
+			 * Accept any client without credentials. The broker is open; restrict access
+			 * at the network layer or switch to {@link #PLAIN}.
+			 */
+			ANONYMOUS,
+
+			/**
+			 * Require a username and password, validated against
+			 * {@code amqgres.sasl.users}. Combine with TLS: PLAIN sends the password in
+			 * the clear.
+			 */
+			PLAIN
+
+		}
+
+		/**
+		 * A username/password pair accepted by the {@code PLAIN} mechanism.
+		 */
+		public record User(String username, String password) {
+		}
 	}
 }

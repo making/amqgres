@@ -44,6 +44,24 @@ certificate under `src/test/resources/tls` (regeneration commands are in
 booting it with the PEM bundle and completing a TLSv1.3 send/receive round trip over `amqps://`;
 like the storage backends, the JVM test suite does not cover the native binary.
 
+## SASL authentication
+
+The broker advertises exactly one mechanism, `amqgres.sasl.mechanism`: `ANONYMOUS` (the default,
+an open broker — the original milestone behaviour) or `PLAIN`, validated against the
+`amqgres.sasl.users` list. A single mechanism rather than a set keeps the policy unambiguous:
+offering both would let a client bypass PLAIN by choosing ANONYMOUS. Validation lives in
+`SaslAuthenticator` (`connection`), a plain class constructed per connection from the properties —
+not a bean, because it has no state or backend dependency; `ConnectionHandler`'s `SaslNegotiator`
+maps its answers onto Proton-J2 SASL outcomes (`SASL_AUTH` on refusal, before any AMQP frame is
+processed). The RFC 4616 authzid is ignored, following Artemis; password comparison is
+constant-time (`MessageDigest.isEqual`). Qpid JMS always sends PLAIN's initial response with
+`sasl-init`, but a client that defers it is answered with an empty challenge and validated from the
+challenge response instead. The `SaslAuthenticationTest` family pins `PLAIN` plus a user; every
+other E2E test relies on the `ANONYMOUS` default. Like TLS and the storage backends, SASL was
+verified against the GraalVM native image by booting it under `PLAIN` (valid credentials
+round-trip, wrong-password and no-credentials refusals) and under the `ANONYMOUS` default; the JVM
+test suite does not cover the native binary.
+
 ## Full message stored, not just the body
 
 The entire encoded message is stored in `body`; `properties` / `application-properties` are also
@@ -197,7 +215,8 @@ Where a scenario needs backend-specific SQL (e.g. back-dating `locked_at` for lo
 `now() - interval` vs `datetime('now', ...)`), the base declares a `protected abstract` hook (e.g.
 `backdatedLockedAt()`) each subclass implements, rather than branching on the backend. The
 `AmqpIntegrationTest`, `ReadmeConnectingClientIntegrationTest`, `QueueProvisioningTest`,
-`DeadLetterQueueIntegrationTest`, `TopicPubSubTest` and `TlsIntegrationTest` families all follow
+`DeadLetterQueueIntegrationTest`, `TopicPubSubTest`, `TlsIntegrationTest`,
+`SaslAuthenticationTest` and `SaslTlsIntegrationTest` families all follow
 this shape — copy an existing trio. Store-level
 unit tests (`MessageStoreTest` / `SqliteMessageStoreTest`) are a separate pair with no shared base,
 asserting against the stores directly.

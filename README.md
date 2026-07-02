@@ -90,6 +90,8 @@ amqgres.lock.timeout-seconds=30
 amqgres.lock.reclaim-interval-seconds=5
 # Serve AMQP over TLS; requires amqgres.tls.bundle when enabled.
 amqgres.tls.enabled=false
+# SASL mechanism offered to clients: ANONYMOUS (open broker) or PLAIN (credentials required).
+amqgres.sasl.mechanism=ANONYMOUS
 ```
 
 Any property can be overridden with environment variables, for example
@@ -138,6 +140,32 @@ factory.setSslContext(sslBundles.getBundle("amqgres-client").createSslContext())
 
 Bundle options such as `spring.ssl.bundle.pem.amqgres.options.enabled-protocols` restrict the TLS
 protocol versions and cipher suites offered.
+
+### Authentication (SASL)
+
+The broker offers exactly one SASL mechanism, selected by `amqgres.sasl.mechanism`. The default is
+`ANONYMOUS`: any client connects without credentials and the broker is open. To require a username
+and password, switch to `PLAIN` and list the accepted users:
+
+```properties
+amqgres.sasl.mechanism=PLAIN
+amqgres.sasl.users[0].username=amqgres
+amqgres.sasl.users[0].password=changeme
+amqgres.sasl.users[1].username=reporting
+amqgres.sasl.users[1].password=changeme2
+```
+
+A client then authenticates by passing its credentials to the connection factory (or in the URL):
+
+```java
+JmsConnectionFactory factory = new JmsConnectionFactory("amqgres", "changeme",
+        "amqp://broker.example.com:5672");
+```
+
+A wrong username or password is refused during the SASL exchange with the `auth` failure code
+(surfaced by Qpid JMS as a `JMSSecurityException`), and a client without credentials cannot
+connect at all because `ANONYMOUS` is not offered. PLAIN transmits the password in the clear, so
+combine it with TLS in production.
 
 ### Choosing the storage backend
 
