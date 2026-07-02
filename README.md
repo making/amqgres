@@ -227,8 +227,12 @@ PostgreSQL this works from any host that can reach it:
 INSERT INTO queues(name) VALUES ('orders');
 ```
 
-Topics, by contrast, need no pre-registration: they are not rows in the `queues` table, and
-`amqgres.topic.auto-create` (default `true`) allows attaching to any topic address. See
+Topics, by contrast, need no pre-registration, because a topic has no table of its own — it exists
+only as a name. Each subscription to a topic is an ordinary queue (a row in `queues`), and the
+`subscriptions` table records which topic that queue is bound to. Publishing to a topic inserts a
+copy of the message into every subscription queue bound to it, so a topic with no subscriptions
+stores nothing. Since there is nothing to create up front, `amqgres.topic.auto-create` (default
+`true`) allows attaching to any topic address. See
 [Publish/subscribe to a topic](#publishsubscribe-to-a-topic).
 
 ### TLS
